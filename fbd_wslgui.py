@@ -154,6 +154,7 @@ import smtplib
 import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import shutil  # For chain data deletion
 
 # ============================================================================
 # AUCTION AUTOMATION - STAGE 4: NOTIFICATION MANAGER
@@ -1480,23 +1481,58 @@ class FBDManager:
             config_frame,
             text="Index Transactions (--index-tx)",
             variable=self.index_tx_var,
-        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=7, column=0, sticky="w", pady=2)
+        ttk.Label(
+            config_frame,
+            text="(General blockchain queries)",
+            font=("Arial", 8),
+            foreground="gray"
+        ).grid(row=7, column=1, sticky="w", padx=(5, 0), pady=2)
 
         self.index_address_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             config_frame,
             text="Index Addresses (--index-address)",
             variable=self.index_address_var,
-        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=8, column=0, sticky="w", pady=2)
+        ttk.Label(
+            config_frame,
+            text="⚠️ Required for wallet operations",
+            font=("Arial", 8, "bold"),
+            foreground="#cc6600"
+        ).grid(row=8, column=1, sticky="w", padx=(5, 0), pady=2)
+        
+        # Warning about enabling on existing chain
+        ttk.Label(
+            config_frame,
+            text="⚠️ CRITICAL: If enabling on existing chain, delete ~/.fbd/chain first!",
+            font=("Arial", 7),
+            foreground="#cc0000"
+        ).grid(row=8, column=2, sticky="w", padx=(5, 0), pady=2)
 
         self.index_auctions_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             config_frame,
             text="Index Auctions (--index-auctions)",
             variable=self.index_auctions_var,
-        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=2)
+        ).grid(row=9, column=0, sticky="w", pady=2)
+        ttk.Label(
+            config_frame,
+            text="⚠️ Required for auction operations",
+            font=("Arial", 8, "bold"),
+            foreground="#cc6600"
+        ).grid(row=9, column=1, sticky="w", padx=(5, 0), pady=2)
+        
+        # Warning about enabling on existing chain
+        ttk.Label(
+            config_frame,
+            text="⚠️ CRITICAL: If enabling on existing chain, delete ~/.fbd/chain first!",
+            font=("Arial", 7),
+            foreground="#cc0000"
+        ).grid(row=9, column=2, sticky="w", padx=(5, 0), pady=2)
 
         config_frame.columnconfigure(1, weight=1)
+        config_frame.columnconfigure(2, weight=1)
 
         # Control buttons
         button_frame = ttk.Frame(tab)
@@ -1517,6 +1553,9 @@ class FBDManager:
         ).pack(side="left", padx=5)
         ttk.Button(
             button_frame, text="Mining Stats", command=self.get_mining_stats
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            button_frame, text="Delete Chain Data", command=self.delete_chain_data
         ).pack(side="left", padx=5)
 
         # Log output
@@ -2982,6 +3021,13 @@ class FBDManager:
             text="Enable auto-restart on crash",
             variable=self.auto_restart_var,
         ).pack(anchor="w")
+        
+        ttk.Label(
+            restart_frame,
+            text="💡 Recommended for unattended operation and mining",
+            font=("Arial", 8),
+            foreground="#006600"
+        ).pack(anchor="w", padx=(20, 0))
 
         ttk.Label(restart_frame, text="Restart delay (seconds):").pack(
             anchor="w", pady=2
@@ -3410,26 +3456,222 @@ class FBDManager:
         self.update_block_calc_status(stopped=True)
 
     def show_index_address_chain_error(self):
-        """Show error dialog for index-address on existing chain"""
+        """Show error dialog for index-address on existing chain with action button"""
         # Disable auto-restart to prevent restart loop
         self.auto_restart_var.set(False)
 
-        messagebox.showerror(
-            "Index-Address Error - Chain Reset Required",
+        self.log("⚠ Auto-restart disabled due to index-address chain error")
+        self.log("⚠ Fix the issue before re-enabling auto-restart")
+        
+        # Create custom dialog with action button
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Index-Address Error - Chain Reset Required")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Error message
+        message_frame = ttk.Frame(dialog, padding=20)
+        message_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(
+            message_frame,
+            text="⚠️ Node Crashed - Chain Reset Required",
+            font=("Arial", 14, "bold"),
+            foreground="#cc0000"
+        ).pack(pady=(0, 10))
+        
+        error_text = scrolledtext.ScrolledText(
+            message_frame, height=10, wrap=tk.WORD, font=("Arial", 10)
+        )
+        error_text.pack(fill="both", expand=True)
+        
+        error_text.insert("1.0",
             "Node crashed because --index-address was enabled on an existing chain.\n\n"
             "Current chain has blocks but no address index exists.\n"
             "Auto-restart has been DISABLED to prevent crash loop.\n\n"
-            "To fix this issue:\n"
-            "1. Stop the node (if still running)\n"
-            "2. Choose one option:\n"
-            "   A) Delete ~/.fbd/chain directory and resync (keeps index-address)\n"
-            "   B) Uncheck 'Index Addresses' and restart (disables indexing)\n\n"
-            "Note: Wallet address operations require --index-address to be enabled.",
-            icon="error",
+            "═══════════════════════════════════════════════════════════\n\n"
+            "SOLUTION OPTIONS:\n\n"
+            "Option A) Delete chain and resync (keeps index-address enabled)\n"
+            "   • Click 'Delete Chain & Restart' button below\n"
+            "   • This will delete ~/.fbd/chain and ~/.fbd/blocks directories\n"
+            "   • Prevents index-tx confusion during resync\n"
+            "   • Node will resync from scratch with indexing enabled\n\n"
+            "Option B) Disable indexing and restart\n"
+            "   • Uncheck 'Index Addresses' in Node & Mining tab\n"
+            "   • Restart the node manually\n"
+            "   • Note: Wallet operations will NOT work without indexing\n\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            "⚠️ IMPORTANT: Wallet address operations require --index-address!"
         )
+        error_text.config(state="disabled")
+        
+        # Button frame
+        button_frame = ttk.Frame(dialog, padding=10)
+        button_frame.pack(fill="x")
+        
+        def delete_and_close():
+            dialog.destroy()
+            self.delete_chain_data(auto_restart=True, from_error=True)
+        
+        ttk.Button(
+            button_frame,
+            text="🗑️ Delete Chain & Restart",
+            command=delete_and_close
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Close",
+            command=dialog.destroy
+        ).pack(side="right", padx=5)
 
-        self.log("⚠ Auto-restart disabled due to index-address chain error")
-        self.log("⚠ Fix the issue before re-enabling auto-restart")
+    def delete_chain_data(self, auto_restart=False, from_error=False):
+        """Delete blockchain chain data with safety checks and confirmation"""
+        # Step 1: Check if node is running
+        if self.fbd_process is not None and self.fbd_process.poll() is None:
+            stop_node = messagebox.askyesno(
+                "Node Running",
+                "The FBD node is currently running and must be stopped before deleting chain data.\n\n"
+                "Stop the node now?",
+                icon="warning"
+            )
+            if stop_node:
+                self.log("🛑 Stopping node for chain data deletion...")
+                self.stop_node()
+                # Wait a moment for shutdown
+                time.sleep(2)
+            else:
+                self.log("⚠ Chain deletion cancelled - node still running")
+                return
+        
+        # Step 2: Determine chain directory paths
+        # Check for custom datadir
+        if (
+            hasattr(self, "custom_datadir_var")
+            and self.custom_datadir_var.get().strip()
+        ):
+            datadir = Path(self.custom_datadir_var.get().strip()).expanduser()
+        else:
+            datadir = Path.home() / ".fbd"
+        
+        chain_dir = datadir / "chain"
+        blocks_dir = datadir / "blocks"
+        
+        # Step 3: Check if any chain data exists
+        dirs_to_delete = []
+        if chain_dir.exists():
+            dirs_to_delete.append(("chain", chain_dir))
+        if blocks_dir.exists():
+            dirs_to_delete.append(("blocks", blocks_dir))
+        
+        if not dirs_to_delete:
+            messagebox.showinfo(
+                "No Chain Data",
+                f"No chain data directories exist in:\n{datadir}\n\n"
+                "Nothing to delete."
+            )
+            return
+        
+        # Step 4: Safety confirmation (unless called from error dialog)
+        if not from_error:
+            dirs_list = "\n".join([f"📁 {name}: {path}" for name, path in dirs_to_delete])
+            confirm = messagebox.askyesno(
+                "⚠️ Confirm Chain Deletion",
+                f"You are about to DELETE all blockchain data:\n\n"
+                f"{dirs_list}\n\n"
+                f"This will:\n"
+                f"  • Delete all synced blockchain data\n"
+                f"  • Delete block index data (prevents index-tx confusion)\n"
+                f"  • Require complete resync (may take hours)\n"
+                f"  • NOT affect your wallets or keys\n\n"
+                f"This action CANNOT be undone!\n\n"
+                f"Are you absolutely sure?",
+                icon="warning"
+            )
+            if not confirm:
+                self.log("⚠ Chain deletion cancelled by user")
+                return
+        
+        # Step 5: Perform deletion
+        try:
+            self.log(f"🗑️ Deleting blockchain data from: {datadir}")
+            
+            # Show progress
+            progress_dialog = tk.Toplevel(self.root)
+            progress_dialog.title("Deleting Chain Data")
+            progress_dialog.geometry("450x180")
+            progress_dialog.transient(self.root)
+            progress_dialog.grab_set()
+            
+            ttk.Label(
+                progress_dialog,
+                text="🗑️ Deleting blockchain data...",
+                font=("Arial", 11, "bold")
+            ).pack(pady=20)
+            
+            progress_label = ttk.Label(
+                progress_dialog,
+                text="",
+                font=("Arial", 9)
+            )
+            progress_label.pack(pady=10)
+            
+            # Delete each directory
+            for name, dir_path in dirs_to_delete:
+                progress_label.config(text=f"Deleting {name}: {dir_path}")
+                progress_dialog.update()
+                
+                if sys.platform == "win32":
+                    # On Windows/WSL
+                    if dir_path.exists():
+                        shutil.rmtree(dir_path)
+                else:
+                    # Native Linux
+                    shutil.rmtree(dir_path)
+                
+                self.log(f"  ✅ Deleted {name} directory")
+            
+            progress_dialog.destroy()
+            
+            self.log("✅ All chain data deleted successfully")
+            
+            # Step 6: Success confirmation with restart option
+            if auto_restart or messagebox.askyesno(
+                "✅ Chain Data Deleted",
+                f"Chain data has been successfully deleted!\n\n"
+                f"The node will need to resync from scratch when started.\n\n"
+                f"Would you like to restart the node now?",
+                icon="info"
+            ):
+                self.log("🔄 Restarting node after chain deletion...")
+                time.sleep(1)
+                self.start_node(is_restart=True)
+            else:
+                messagebox.showinfo(
+                    "Ready to Resync",
+                    "Chain data deleted.\n\n"
+                    "Start the node manually when ready to begin resyncing."
+                )
+        
+        except PermissionError as e:
+            self.log(f"❌ Permission denied deleting chain: {e}")
+            messagebox.showerror(
+                "Permission Denied",
+                f"Could not delete chain data due to permissions.\n\n"
+                f"Error: {e}\n\n"
+                f"Try running with appropriate permissions or delete manually:\n"
+                f"rm -rf {datadir}/chain {datadir}/blocks"
+            )
+        except Exception as e:
+            self.log(f"❌ Error deleting chain: {e}")
+            messagebox.showerror(
+                "Deletion Failed",
+                f"Failed to delete chain data.\n\n"
+                f"Error: {e}\n\n"
+                f"You may need to delete manually:\n"
+                f"rm -rf {datadir}/chain {datadir}/blocks"
+            )
 
     def show_database_lock_error(self):
         """Show error dialog for database lock (another instance running)"""
@@ -4004,6 +4246,10 @@ class FBDManager:
 
     def create_wallet(self):
         """Create a new wallet"""
+        # Check if node is running
+        if not self.check_node_running():
+            return
+        
         name = tk.simpledialog.askstring("Create Wallet", "Enter wallet name:")
         if name:
             result = self.rpc_call("createwallet", [name])
@@ -4015,6 +4261,10 @@ class FBDManager:
 
     def import_wallet(self):
         """Import an existing wallet from seed phrase"""
+        # Check if node is running
+        if not self.check_node_running():
+            return
+        
         # Create dialog for wallet import
         dialog = tk.Toplevel(self.root)
         dialog.title("Import Wallet")
@@ -4085,6 +4335,10 @@ class FBDManager:
         wallet = self.wallet_name_var.get()
         if not wallet:
             messagebox.showwarning("Warning", "Please enter a wallet name to delete")
+            return
+
+        # Check if node is running
+        if not self.check_node_running():
             return
 
         # Confirm deletion
