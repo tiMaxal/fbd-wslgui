@@ -1465,10 +1465,11 @@ class FBDManager:
 
         # Miner threads
         max_threads = os.cpu_count() or 1
+        default_miner_threads = max(1, max_threads // 2)
         ttk.Label(config_frame, text=f"Miner Threads (max: {max_threads}):").grid(
             row=6, column=0, sticky="w", pady=2
         )
-        self.miner_threads_var = tk.StringVar(value="12")
+        self.miner_threads_var = tk.StringVar(value=str(default_miner_threads))
         self.miner_threads_entry = ttk.Entry(
             config_frame, textvariable=self.miner_threads_var, width=18
         )
@@ -3148,6 +3149,12 @@ class FBDManager:
 
     def toggle_mining_options(self):
         """Enable/disable mining options based on checkbox"""
+        if self.mining_enabled.get() and self.pool_miner_process and self.pool_miner_process.poll() is None:
+            self.mining_enabled.set(False)
+            messagebox.showwarning(
+                "Mining Mode Conflict",
+                "Pool miner is running. Stop it before enabling internal miner.",
+            )
         state = "normal" if self.mining_enabled.get() else "disabled"
         self.miner_address_entry.config(state=state)
         self.miner_threads_entry.config(state=state)
@@ -3252,6 +3259,13 @@ class FBDManager:
                 messagebox.showwarning("Warning", "Node is already running!")
             return
 
+        if self.mining_enabled.get() and self.pool_miner_process and self.pool_miner_process.poll() is None:
+            messagebox.showwarning(
+                "Mining Mode Conflict",
+                "Stop pool miner before starting the node with internal mining enabled.",
+            )
+            return
+
         cmd = self.build_command()
 
         # If running on Windows, wrap command with WSL to execute Linux binary
@@ -3347,6 +3361,13 @@ class FBDManager:
             messagebox.showwarning("Warning", "Pool miner is already running!")
             return
 
+        if self.mining_enabled.get():
+            messagebox.showwarning(
+                "Mining Mode Conflict",
+                "Disable internal mining before starting pool miner.",
+            )
+            return
+
         miner_path = self.script_dir / "miner"
         if not miner_path.exists():
             messagebox.showerror(
@@ -3377,6 +3398,9 @@ class FBDManager:
             threading.Thread(target=self.monitor_pool_miner_output, daemon=True).start()
             self.start_pool_miner_btn.config(state="disabled")
             self.stop_pool_miner_btn.config(state="normal")
+            self.mining_checkbox.config(state="disabled")
+            self.miner_address_entry.config(state="disabled")
+            self.miner_threads_entry.config(state="disabled")
 
         except Exception as e:
             self.log(f"Error starting pool miner: {e}")
@@ -3410,6 +3434,9 @@ class FBDManager:
         """Update pool miner controls when the miner stops"""
         self.start_pool_miner_btn.config(state="normal")
         self.stop_pool_miner_btn.config(state="disabled")
+        if not self.fbd_process or self.fbd_process.poll() is not None:
+            self.mining_checkbox.config(state="normal")
+        self.toggle_mining_options()
 
     def monitor_pool_miner_output(self):
         """Monitor pool miner output in background thread"""
@@ -5515,6 +5542,7 @@ class FBDManager:
     # Settings methods
     def load_config(self):
         """Load configuration from file"""
+        default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
         default_config = {
             "fbd_path": "./fbd",
             "network": "main",
@@ -5523,7 +5551,7 @@ class FBDManager:
             "agent": "tiMaxal",
             "mining_enabled": True,
             "miner_address": "fb1qp979k4ell5hvaktk5e3d6man66jrz2ucvkt748",
-            "miner_threads": "12",
+            "miner_threads": default_miner_threads,
             "pool_miner_address": "",
             "pool_miner_host": "pool.woodburn.au",
             "pool_miner_threads": "0",
@@ -5591,6 +5619,7 @@ class FBDManager:
 
     def load_saved_settings(self):
         """Load saved settings into UI"""
+        default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
         self.fbd_path_var.set(self.config.get("fbd_path", "./fbd"))
         self.network_var.set(self.config.get("network", "main"))
         self.host_var.set(self.config.get("host", "0.0.0.0"))
@@ -5598,7 +5627,7 @@ class FBDManager:
         self.agent_var.set(self.config.get("agent", "tiMaxal"))
         self.mining_enabled.set(self.config.get("mining_enabled", True))
         self.miner_address_var.set(self.config.get("miner_address", ""))
-        self.miner_threads_var.set(self.config.get("miner_threads", "12"))
+        self.miner_threads_var.set(self.config.get("miner_threads", default_miner_threads))
         self.pool_miner_address_var.set(
             self.config.get("pool_miner_address", self.config.get("miner_address", ""))
         )
@@ -5655,6 +5684,7 @@ class FBDManager:
     def reset_defaults(self):
         """Reset settings to defaults"""
         if messagebox.askyesno("Confirm", "Reset all settings to defaults?"):
+            default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
             self.config = self.load_config()
             # Clear the config file by reloading defaults
             self.config = {
@@ -5665,7 +5695,7 @@ class FBDManager:
                 "agent": "tiMaxal",
                 "mining_enabled": True,
                 "miner_address": "fb1qp979k4ell5hvaktk5e3d6man66jrz2ucvkt748",
-                "miner_threads": "12",
+                "miner_threads": default_miner_threads,
                 "index_tx": True,
                 "index_address": False,
                 "index_auctions": False,
