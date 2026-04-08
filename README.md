@@ -13,6 +13,32 @@ A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, w
 
 > 💡 **Note:** The "wslgui" naming reflects its original WSL development environment and community introduction, but the core app is standard cross-platform Python/Tkinter that runs natively on any Linux system.
 
+## 📦 Dependencies
+
+**Only 2 packages needed:**
+- `python3-tk` - GUI framework (tkinter)
+- `python3-requests` - HTTP library for RPC calls
+
+**All other imports are Python standard library** (json, os, datetime, email, pathlib, base64, etc.)
+
+**Auto-installation:** The app will check for missing dependencies on startup and offer to install them automatically using your system's package manager (apt, dnf, yum, or pacman).
+
+**For detailed installation instructions, see [INSTALL.md](INSTALL.md)**
+
+**Quick install:**
+```bash
+# Ubuntu/Debian/Xubuntu
+sudo apt update && sudo apt install -y python3-tk python3-requests
+
+# Fedora/RHEL/CentOS
+sudo dnf install -y python3-tkinter python3-requests
+
+# Arch Linux
+sudo pacman -S tk python-requests
+```
+
+**Minimum Python version:** 3.6+
+
 ## ⚡ Quick Start
 
 **Native Linux:**
@@ -63,8 +89,10 @@ Runs the test version (fbd_wslgui.test.py) separately.
 📋 **TODO:** Future versions will include automatic binary version checking and download capability.
 
 ### Documentation
-- **README.md** - This file
+- **README.md** - This file (feature overview)
+- **INSTALL.md** - Complete installation guide with troubleshooting
 - **QUICKSTART.txt** - Quick reference guide
+- **requirements.txt** - Python dependency documentation
 - **ai-hist_fbd-wslgui/** - Archived docs, scripts, and older versions
 
 ## ✨ Key Features

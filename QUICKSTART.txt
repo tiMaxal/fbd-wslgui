@@ -14,7 +14,19 @@ This is a Linux-native Python application:
 The "wslgui" name reflects original WSL development, but this
 is standard cross-platform Python/Tkinter code.
 
-📋 CURRENT FILES:
+� DEPENDENCIES:
+───────────────────────────────────────────────────────────────
+Required Python packages:
+  • Python 3.6+ (with tkinter)
+  • python3-tk (GUI framework)
+  • python3-requests (HTTP library)
+
+The app will auto-check and offer to install missing packages!
+
+Manual install (Ubuntu/Debian):
+  sudo apt update && sudo apt install -y python3-tk python3-requests
+
+�📋 CURRENT FILES:
 
 Core Application:
   • fbd_wslgui.py              - Main GUI (v3.0.0)

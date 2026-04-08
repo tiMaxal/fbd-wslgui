@@ -2,15 +2,145 @@
 """
 FBD Node Manager GUI
 A graphical interface for managing FBD node, mining, wallet, and auctions.
-Works in WSL with X11 forwarding enabled.
+Linux-native Python app (runs on native Linux, WSL, or Windows via WSL).
 
 Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026
 """
 
+# ============================================================================
+# DEPENDENCY CHECKER - Runs before imports to ensure packages are available
+# ============================================================================
+
 import os
 import sys
-import json
 import subprocess
+
+
+def check_and_install_dependencies():
+    """Check for required Python packages and offer to install if missing"""
+    missing_packages = []
+    install_commands = {}
+
+    # Check for tkinter
+    try:
+        import tkinter
+    except ImportError:
+        missing_packages.append("tkinter")
+        install_commands["tkinter"] = "python3-tk"
+
+    # Check for requests
+    try:
+        import requests
+    except ImportError:
+        missing_packages.append("requests")
+        install_commands["requests"] = "python3-requests"
+
+    if not missing_packages:
+        return True  # All dependencies satisfied
+
+    # Determine package manager
+    pkg_manager = None
+    install_cmd_template = None
+
+    if os.path.exists("/usr/bin/apt") or os.path.exists("/usr/bin/apt-get"):
+        pkg_manager = "apt"
+        install_cmd_template = "sudo apt update && sudo apt install -y {packages}"
+    elif os.path.exists("/usr/bin/dnf"):
+        pkg_manager = "dnf"
+        install_cmd_template = "sudo dnf install -y {packages}"
+    elif os.path.exists("/usr/bin/yum"):
+        pkg_manager = "yum"
+        install_cmd_template = "sudo yum install -y {packages}"
+    elif os.path.exists("/usr/bin/pacman"):
+        pkg_manager = "pacman"
+        # Pacman package names might differ
+        install_commands["tkinter"] = "tk"
+        install_commands["requests"] = "python-requests"
+        install_cmd_template = "sudo pacman -S --noconfirm {packages}"
+
+    # Build package list
+    if pkg_manager in ["apt", "dnf", "yum"]:
+        packages_to_install = " ".join(install_commands.values())
+    else:
+        packages_to_install = " ".join(install_commands.values())
+
+    # Display error and offer to install
+    print("\n" + "=" * 70)
+    print("⚠️  MISSING DEPENDENCIES")
+    print("=" * 70)
+    print(f"\nThe following Python packages are required but not installed:")
+    for pkg in missing_packages:
+        print(f"  • {pkg}")
+
+    if pkg_manager:
+        install_cmd = install_cmd_template.format(packages=packages_to_install)
+        print(f"\n📦 Detected package manager: {pkg_manager}")
+        print(f"\n🔧 Install command:\n   {install_cmd}")
+
+        # Ask if user wants to auto-install
+        try:
+            response = input(
+                "\nWould you like to install these packages now? [Y/n]: "
+            ).strip().lower()
+            if response in ["", "y", "yes"]:
+                print(f"\n🚀 Installing packages with {pkg_manager}...")
+                if pkg_manager == "apt":
+                    # Run apt update first
+                    result = subprocess.run(
+                        ["sudo", "apt", "update"],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        print(f"⚠️  apt update failed: {result.stderr}")
+
+                # Install packages
+                result = subprocess.run(
+                    install_cmd.split(), capture_output=True, text=True
+                )
+
+                if result.returncode == 0:
+                    print("✅ Installation successful!")
+                    print("\n🔄 Please restart the application:")
+                    print("   python3 fbd_wslgui.py")
+                    print("=" * 70 + "\n")
+                    sys.exit(0)
+                else:
+                    print(f"\n❌ Installation failed!")
+                    print(f"Error: {result.stderr}")
+
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Installation cancelled by user.")
+    else:
+        print("\n⚠️  Could not detect package manager.")
+        print("Please install the required packages manually.")
+
+    # Manual installation instructions
+    print("\n" + "=" * 70)
+    print("📋 MANUAL INSTALLATION INSTRUCTIONS")
+    print("=" * 70)
+    print("\nUbuntu / Debian:")
+    print("   sudo apt update && sudo apt install -y python3-tk python3-requests")
+    print("\nFedora / RHEL / CentOS:")
+    print("   sudo dnf install -y python3-tkinter python3-requests")
+    print("\nArch Linux:")
+    print("   sudo pacman -S tk python-requests")
+    print("\nOther distributions:")
+    print("   pip3 install requests")
+    print("   (tkinter package name varies - search for python3-tk or python-tkinter)")
+    print("=" * 70 + "\n")
+
+    sys.exit(1)
+
+
+# Run dependency check before imports
+check_and_install_dependencies()
+
+# ============================================================================
+# IMPORTS - Only reached if dependencies are satisfied
+# ============================================================================
+
+import json
 import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
@@ -5969,9 +6099,13 @@ class FBDManager:
             display_message = message
 
         # Update UI only for info and above (skip debug to reduce clutter)
-        if level in ["info", "warning", "error"]:
-            self.log_text.insert(tk.END, f"{display_message}\n")
-            self.log_text.see(tk.END)
+        # Check if log_text widget exists (may not during initialization)
+        if level in ["info", "warning", "error"] and hasattr(self, "log_text"):
+            try:
+                self.log_text.insert(tk.END, f"{display_message}\n")
+                self.log_text.see(tk.END)
+            except Exception:
+                pass  # UI not ready yet, skip GUI logging
 
         # Write to log file with timestamp and rotation
         try:
@@ -5979,8 +6113,12 @@ class FBDManager:
             log_line = f"[{timestamp}] [{level.upper()}] {message}\n"
             self._write_log_with_rotation(log_line)
         except Exception as e:
-            # Don't crash if logging fails, just show in GUI
-            self.log_text.insert(tk.END, f"(Log file error: {e})\n")
+            # Don't crash if logging fails
+            if hasattr(self, "log_text"):
+                try:
+                    self.log_text.insert(tk.END, f"(Log file error: {e})\n")
+                except Exception:
+                    pass  # UI not ready, fail silently
 
     def clear_log_display(self):
         """Clear the log display (doesn't delete log file)"""
@@ -6066,6 +6204,11 @@ FBD Node Manager v3.0.0 - Quick Help
 • Linux-native Python app (runs on native Linux, WSL, or Windows via WSL)
 • "wslgui" name reflects original WSL development environment
 • Core app is standard cross-platform Python/Tkinter
+
+📦 DEPENDENCIES:
+• Python 3.6+ with tkinter (python3-tk)
+• python3-requests library
+• Auto-checked on startup with install offers
 
 ⚠️  REQUIRED BINARIES:
 • fbd & fbdctl NOT included in repo (file size)
