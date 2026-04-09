@@ -1,20 +1,20 @@
-# 🎯 FBD Node Manager GUI v3.0.0
+#  FBD Node Manager GUI v3.0.0
 
 > **Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026**
 
 A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, wallets, and name auctions.
 
-## 🐧 Platform Compatibility
+##  Platform Compatibility
 
 **This is a Linux-native Python application** that runs on:
 
-- ✅ **Native Linux** - Run directly with `python3 fbd_wslgui.py`
-- ✅ **WSL (Windows Subsystem for Linux)** - Run directly or use wrapper scripts
-- ✅ **Windows (via WSL)** - Use included `.bat` launcher scripts for convenience
+-  **Native Linux** - Run directly with `python3 fbd_wslgui.py`
+-  **WSL (Windows Subsystem for Linux)** - Run directly or use wrapper scripts
+-  **Windows (via WSL)** - Use included `.bat` launcher scripts for convenience
 
-> 💡 **Note:** The "wslgui" naming reflects its original WSL development environment and community introduction, but the core app is standard cross-platform Python/Tkinter that runs natively on any Linux system.
+>  **Note:** The "wslgui" naming reflects its original WSL development environment and community introduction, but the core app is standard cross-platform Python/Tkinter that runs natively on any Linux system.
 
-## 📦 Dependencies
+##  Dependencies
 
 **Only 3 packages needed:**
 
@@ -43,7 +43,7 @@ sudo pacman -S tk python-requests sqlite3
 
 **Minimum Python version:** 3.6+
 
-## ⚡ Quick Start
+##  Quick Start
 
 **Native Linux:**
 
@@ -77,7 +77,7 @@ Double-click: fbdwslgui-test_launch.bat
 
 Runs the test version (fbd_wslgui.test.py) separately.
 
-## 📦 What's Included
+##  What's Included
 
 ### Core Files
 
@@ -94,7 +94,7 @@ Runs the test version (fbd_wslgui.test.py) separately.
 
 #### FBD
 
-⚠️ **IMPORTANT:** The `fbd` and `fbdctl` binaries are NOT included in this repository due to file size.
+[!] **IMPORTANT:** The `fbd` and `fbdctl` binaries are NOT included in this repository due to file size.
 **You must download them separately:**
 
 1. Download the latest Linux binaries: <https://fbd.dev/download/fbd-latest-linux-x86_64.zip>
@@ -105,7 +105,7 @@ Runs the test version (fbd_wslgui.test.py) separately.
 
 #### Pool miner
 
-⚠️ **IMPORTANT:** The `miner` binary is NOT included in this repository due to file size.
+[!] **IMPORTANT:** The `miner` binary is NOT included in this repository due to file size.
 **You must download it separately:**
 
 1. Download the Linux binary: <https://l.woodburn.au/miner>
@@ -116,7 +116,7 @@ More details in the **Pool Mining** section below.
 
 ---
 
-## ⛏️ Mining Options
+## Mining Options
 
 The FBD Node Manager supports **two distinct mining modes**:
 
@@ -130,7 +130,7 @@ Mine blocks independently and keep all rewards.
 - Node & Mining Tab:
   - Enter your FBC wallet address in "Miner Address"
   - Set CPU threads (0 = auto, recommended: cores - 1)
-  - ✅ **Check "Enable Mining"**
+  -  **Check "Enable Mining"**
   - Leave Pool Miner fields empty
 - Click "Start Node"
 
@@ -142,7 +142,7 @@ Mine blocks independently and keep all rewards.
 ```
 Miner Address: fb1qzg8epa5f8s2sxu8xz7vq9yqx8c9d7e6f5g4h3g
 Miner Threads: 12
-Enable Mining: ✓ CHECKED
+Enable Mining:  CHECKED
 Pool Miner: (empty)
 ```
 
@@ -164,7 +164,7 @@ Mine with others in a mining pool for consistent payouts.
      - Enter your FBC wallet address in "Pool Miner Wallet Address"
      - Pool Host: `pool.woodburn.au` (default)
      - Pool Threads: 0 (auto-detect, recommended)
-     - ⚠️ **Uncheck "Enable Mining"** (internal mining disabled)
+   - Uncheck "Enable Mining" (internal mining disabled)
    - Click "Start Pool Miner" button
 
     - Settings Tab (recommended before first run):
@@ -206,7 +206,7 @@ Mine with others in a mining pool for consistent payouts.
 Pool Miner Wallet: fb1qzg8epa5f8s2sxu8xz7vq9yqx8c9d7e6f5g4h3g
 Pool Host: pool.woodburn.au
 Pool Threads: 0 (auto)
-Enable Mining: ☐ UNCHECKED (off!)
+Enable Mining:  UNCHECKED (off!)
 ```
 
 **Pool Username:** When mining, you'll be identified as: `<your-wallet-address>.wslgui`
@@ -215,7 +215,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 
 ### Switching Between Mining Modes
 
-⚠️ **You CANNOT run both mining modes simultaneously.**
+[!] **You CANNOT run both mining modes simultaneously.**
 
 **To switch from Solo → Pool Mining:**
 
@@ -273,9 +273,9 @@ Enable Mining: ☐ UNCHECKED (off!)
 - **requirements.txt** - Python dependency documentation
 - **ai-hist_fbd-wslgui/** - Archived docs, scripts, and older versions
 
-## ✨ Key Features
+##  Key Features
 
-### 🖥️ Node Management
+### Node Management
 
 - Start/stop FBD node with custom parameters
 - Real-time monitoring (block height, peer count)
@@ -284,7 +284,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 - Live log output with auto-scroll
 - Auto-restart on crash (optional)
 
-### ⛏️ Mining Configuration
+### Mining Configuration
 
 - Toggle mining on/off independently of node
 - Set miner address for coinbase rewards
@@ -293,7 +293,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 - Agent name customization
 - Node-only mode available (sync without mining)
 
-### 💰 Wallet Operations
+###  Wallet Operations
 
 - List and create wallets
 - Check balances and get addresses
@@ -302,7 +302,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 - Wallet info with balance breakdown
 - Multi-wallet support
 
-### 🏆 Name Auctions
+###  Name Auctions
 
 - Get comprehensive name information
 - Open new name auctions
@@ -312,7 +312,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 - View all owned names
 - Track auction status and timing
 
-### 🤖 Auction Automation (Advanced)
+###  Auction Automation (Advanced)
 
 - Create automated auction workflows
 - Schedule bids with reveal automation
@@ -320,7 +320,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 - Job monitoring and management
 - Batch operations
 
-### ⚙️ Settings & Persistence
+### Settings & Persistence
 
 - Save/load configurations
 - Export/import for backup
@@ -328,7 +328,7 @@ Enable Mining: ☐ UNCHECKED (off!)
 - Configurable FBD paths
 - RPC host/port customization
 
-## 📖 Usage Guide
+##  Usage Guide
 
 ### First Time Setup
 
@@ -350,7 +350,7 @@ Enable Mining: ☐ UNCHECKED (off!)
    - Network: Select "main" (or testnet for testing)
    - Miner Address: Your FBC wallet address for rewards
    - Miner Threads: 12 (or 0 for auto)
-   - Enable Mining: ✓ (or uncheck for node-only)
+   - Enable Mining:  (or uncheck for node-only)
    - Index Options: Enable as needed
 
 4. **Start Node:**
@@ -437,7 +437,7 @@ Auctions Tab → Enter name → Get Name Info
 Auctions Tab → Load My Names
 ```
 
-## 🔧 Advanced Features
+##  Advanced Features
 
 ### Node-Only Mode
 
@@ -517,7 +517,7 @@ chmod +x fbd fbdctl
 3. Review log output for errors
 4. Test manually: `./fbd-latest-linux-x86_64/fbd --help`
 
-## 📊 Network Reference
+##  Network Reference
 
 | Network  | P2P   | RPC   | DNS   | NS    | Address Prefix |
 |----------|-------|-------|-------|-------|----------------|
@@ -526,7 +526,7 @@ chmod +x fbd fbdctl
 | regtest  | 52867 | 52868 | 52869 | 52870 | fr             |
 | simnet   | 62867 | 62868 | 62869 | 62870 | fs             |
 
-## 💾 File Locations
+##  File Locations
 
 ### Configuration
 
@@ -546,14 +546,14 @@ chmod +x fbd fbdctl
 - **Old Versions**: `./ai-hist_fbd-wslgui/fbd_wslgui.*.py`
 - **Setup Scripts**: `./ai-hist_fbd-wslgui/*.sh`
 
-## � Example Workflows
+## Example Workflows
 
 ### Solo Mining Setup
 
 ```
 1. Double-click fbd-wslgui_launch.bat
 2. Settings → Set miner address
-3. Node & Mining → Enable Mining ✓
+3. Node & Mining → Enable Mining 
 4. Node & Mining → Set threads (12)
 5. Start Node
 6. Monitor log for "Mined block..." messages
@@ -586,7 +586,7 @@ chmod +x fbd fbdctl
 6. Use as RPC server for other apps
 ```
 
-## 🎁 Tips & Tricks
+##  Tips & Tricks
 
 1. **Desktop Shortcut**: Right-click fbd-wslgui_launch.bat → Send to Desktop
 2. **Keep Settings**: Use Save/Load Settings for different configs
@@ -596,7 +596,7 @@ chmod +x fbd fbdctl
 6. **Schedule Bids**: Use Auction Automation for timed operations
 7. **Quick Access**: File → Open GUI Config Directory
 
-## 🔗 Resources
+##  Resources
 
 - **FBD Documentation**: <https://fbd.dev>
 - **Whitepaper**: <https://fistbump.org/fistbump.txt>
@@ -604,7 +604,7 @@ chmod +x fbd fbdctl
 - **Source Code**: <https://github.com/fistbump-org/fbd>
 - **Community**: Discord/Telegram (check fistbump.org)
 
-## 🗂️ Version History
+## Version History
 
 - **v3.0.0** (Current) - Production release with auction automation
 - **v2.0.0** - Enhanced auction features (archived)
@@ -612,19 +612,19 @@ chmod +x fbd fbdctl
 
 Older versions and detailed change history in `ai-hist_fbd-wslgui/`
 
-## 📄 License
+##  License
 
 This GUI tool is provided as-is for the Fistbump community.  
 FBD itself is developed by eskimo and contributors.
 
 ---
 
-**Need Help?**
+**Need Help[!]**
 
 - Check `QUICKSTART.txt` for quick reference
 - See `ai-hist_fbd-wslgui/GUI_README.md` for detailed features
-- Run in-app Help (? button) for quick guide
+- Run in-app Help ([!] button) for quick guide
 - Check `ai-hist_fbd-wslgui/` for additional documentation
 
-**Ready to Start?**
-→ Double-click `fbd-wslgui_launch.bat`! 🚀
+**Ready to Start[!]**
+→ Double-click `fbd-wslgui_launch.bat`! 
