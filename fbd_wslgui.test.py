@@ -79,17 +79,17 @@ def check_and_install_dependencies():
 
         # Ask if user wants to auto-install
         try:
-            response = input(
-                "\nWould you like to install these packages now? [Y/n]: "
-            ).strip().lower()
+            response = (
+                input("\nWould you like to install these packages now? [Y/n]: ")
+                .strip()
+                .lower()
+            )
             if response in ["", "y", "yes"]:
                 print(f"\n🚀 Installing packages with {pkg_manager}...")
                 if pkg_manager == "apt":
                     # Run apt update first
                     result = subprocess.run(
-                        ["sudo", "apt", "update"],
-                        capture_output=True,
-                        text=True
+                        ["sudo", "apt", "update"], capture_output=True, text=True
                     )
                     if result.returncode != 0:
                         print(f"⚠️  apt update failed: {result.stderr}")
@@ -144,6 +144,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 from pathlib import Path
+import hashlib
 import requests
 from requests.auth import HTTPBasicAuth
 import time
@@ -1360,13 +1361,64 @@ class FBDManager:
         self.create_block_calc_tab()
         self.create_settings_tab()
 
+    def _bind_canvas_mousewheel(self, canvas, tab_widget):
+        """Bind mousewheel scrolling to a tab's canvas only while hovered."""
+
+        def _on_mousewheel(event):
+            if hasattr(event, "delta") and event.delta:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif hasattr(event, "num"):
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+
+        def _bind(_event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_mousewheel)
+            canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind(_event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        for widget in (tab_widget, canvas):
+            widget.bind("<Enter>", _bind)
+            widget.bind("<Leave>", _unbind)
+
     def create_node_tab(self):
         """Create node control tab"""
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Node & Mining")
 
+        # Create canvas and scrollbar for scrollable content
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas_window = canvas.create_window(
+            (0, 0), window=scrollable_frame, anchor="nw"
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(canvas_window, width=e.width),
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Enable mousewheel scrolling while cursor is over this tab
+        self._bind_canvas_mousewheel(canvas, tab)
+
         # Status frame
-        status_frame = ttk.LabelFrame(tab, text="Node Status", padding=10)
+        status_frame = ttk.LabelFrame(scrollable_frame, text="Node Status", padding=10)
         status_frame.pack(fill="x", padx=10, pady=5)
 
         self.status_label = ttk.Label(
@@ -1397,7 +1449,9 @@ class FBDManager:
         self.total_blocks_label.pack()
 
         # Mining config frame
-        config_frame = ttk.LabelFrame(tab, text="Mining Configuration", padding=10)
+        config_frame = ttk.LabelFrame(
+            scrollable_frame, text="Mining Configuration", padding=10
+        )
         config_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Network
@@ -1477,7 +1531,7 @@ class FBDManager:
         self.miner_threads_entry.grid(row=6, column=1, sticky="ew", pady=2)
 
         # Pool miner
-        pool_frame = ttk.LabelFrame(tab, text="Pool Miner", padding=10)
+        pool_frame = ttk.LabelFrame(scrollable_frame, text="Pool Miner", padding=10)
         pool_frame.pack(fill="x", padx=10, pady=5)
 
         ttk.Label(pool_frame, text="Wallet Address:").grid(
@@ -1533,7 +1587,7 @@ class FBDManager:
             config_frame,
             text="(General blockchain queries)",
             font=("Arial", 8),
-            foreground="gray"
+            foreground="gray",
         ).grid(row=7, column=1, sticky="w", padx=(5, 0), pady=2)
 
         self.index_address_var = tk.BooleanVar(value=False)
@@ -1546,15 +1600,15 @@ class FBDManager:
             config_frame,
             text="⚠️ Required for wallet operations",
             font=("Arial", 8, "bold"),
-            foreground="#cc6600"
+            foreground="#cc6600",
         ).grid(row=8, column=1, sticky="w", padx=(5, 0), pady=2)
-        
+
         # Warning about enabling on existing chain
         ttk.Label(
             config_frame,
             text="⚠️ CRITICAL: If enabling on existing chain, delete ~/.fbd/chain first!",
             font=("Arial", 7),
-            foreground="#cc0000"
+            foreground="#cc0000",
         ).grid(row=8, column=2, sticky="w", padx=(5, 0), pady=2)
 
         self.index_auctions_var = tk.BooleanVar(value=False)
@@ -1567,22 +1621,22 @@ class FBDManager:
             config_frame,
             text="⚠️ Required for auction operations",
             font=("Arial", 8, "bold"),
-            foreground="#cc6600"
+            foreground="#cc6600",
         ).grid(row=9, column=1, sticky="w", padx=(5, 0), pady=2)
-        
+
         # Warning about enabling on existing chain
         ttk.Label(
             config_frame,
             text="⚠️ CRITICAL: If enabling on existing chain, delete ~/.fbd/chain first!",
             font=("Arial", 7),
-            foreground="#cc0000"
+            foreground="#cc0000",
         ).grid(row=9, column=2, sticky="w", padx=(5, 0), pady=2)
 
         config_frame.columnconfigure(1, weight=1)
         config_frame.columnconfigure(2, weight=1)
 
         # Control buttons
-        button_frame = ttk.Frame(tab)
+        button_frame = ttk.Frame(scrollable_frame)
         button_frame.pack(fill="x", padx=10, pady=5)
 
         self.start_btn = ttk.Button(
@@ -1606,7 +1660,7 @@ class FBDManager:
         ).pack(side="left", padx=5)
 
         # Log output
-        log_frame = ttk.LabelFrame(tab, text="Node Output", padding=5)
+        log_frame = ttk.LabelFrame(scrollable_frame, text="Node Output", padding=5)
         log_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         self.log_text = scrolledtext.ScrolledText(log_frame, height=10, wrap=tk.WORD)
@@ -1636,9 +1690,34 @@ class FBDManager:
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Wallet")
 
+        # Create canvas and scrollbar for scrollable content
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas_window = canvas.create_window(
+            (0, 0), window=scrollable_frame, anchor="nw"
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(canvas_window, width=e.width),
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Enable mousewheel scrolling while cursor is over this tab
+        self._bind_canvas_mousewheel(canvas, tab)
+
         # Info message
         info_msg = ttk.Label(
-            tab,
+            scrollable_frame,
             text="⚠️ Note: The FBD node must be running for wallet operations to work",
             font=("Arial", 9),
             foreground="red",
@@ -1650,17 +1729,28 @@ class FBDManager:
         info_msg.pack(fill="x", padx=10, pady=(5, 0))
 
         # Wallet selection
-        wallet_frame = ttk.LabelFrame(tab, text="Wallet Selection", padding=10)
+        wallet_frame = ttk.LabelFrame(
+            scrollable_frame, text="Wallet Selection", padding=10
+        )
         wallet_frame.pack(fill="x", padx=10, pady=5)
 
         ttk.Label(wallet_frame, text="Active Wallet:").pack(side="left", padx=5)
         self.wallet_name_var = tk.StringVar(value="main")
-        ttk.Entry(wallet_frame, textvariable=self.wallet_name_var, width=20).pack(
-            side="left", padx=5
+        self.wallet_combo = ttk.Combobox(
+            wallet_frame,
+            textvariable=self.wallet_name_var,
+            width=20,
+            state="readonly",
         )
-        ttk.Button(wallet_frame, text="List Wallets", command=self.list_wallets).pack(
-            side="left", padx=5
+        self.wallet_combo.pack(side="left", padx=5)
+        self.wallet_combo.bind("<<ComboboxSelected>>", self.on_active_wallet_selected)
+        self.wallet_combo.bind(
+            "<Button-1>", lambda _e: self.list_wallets(show_feedback=False)
         )
+
+        ttk.Button(
+            wallet_frame, text="Copy Address", command=self.copy_wallet_address_dialog
+        ).pack(side="left", padx=5)
         ttk.Button(wallet_frame, text="Create Wallet", command=self.create_wallet).pack(
             side="left", padx=5
         )
@@ -1671,8 +1761,12 @@ class FBDManager:
             side="left", padx=5
         )
 
+        self.update_wallet_dropdown([self.wallet_name_var.get() or "main"])
+
         # Wallet info
-        info_frame = ttk.LabelFrame(tab, text="Wallet Information", padding=10)
+        info_frame = ttk.LabelFrame(
+            scrollable_frame, text="Wallet Information", padding=10
+        )
         info_frame.pack(fill="x", padx=10, pady=5)
 
         self.balance_label = ttk.Label(
@@ -1688,7 +1782,7 @@ class FBDManager:
         ).pack(pady=5)
 
         # Send payment
-        send_frame = ttk.LabelFrame(tab, text="Send Payment", padding=10)
+        send_frame = ttk.LabelFrame(scrollable_frame, text="Send Payment", padding=10)
         send_frame.pack(fill="x", padx=10, pady=5)
 
         ttk.Label(send_frame, text="To Address:").grid(
@@ -1723,7 +1817,9 @@ class FBDManager:
         send_frame.columnconfigure(1, weight=1)
 
         # Transaction history
-        history_frame = ttk.LabelFrame(tab, text="Transaction History", padding=5)
+        history_frame = ttk.LabelFrame(
+            scrollable_frame, text="Transaction History", padding=5
+        )
         history_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         self.tx_text = scrolledtext.ScrolledText(history_frame, height=10, wrap=tk.WORD)
@@ -1754,11 +1850,8 @@ class FBDManager:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Enable mousewheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Enable mousewheel scrolling while cursor is over this tab
+        self._bind_canvas_mousewheel(canvas, tab)
 
         # Now use scrollable_frame instead of tab for all content
         # Wallet balance info
@@ -2052,8 +2145,35 @@ class FBDManager:
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Block Calc")
 
+        # Create canvas and scrollbar for scrollable content
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas_window = canvas.create_window(
+            (0, 0), window=scrollable_frame, anchor="nw"
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(canvas_window, width=e.width),
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Enable mousewheel scrolling while cursor is over this tab
+        self._bind_canvas_mousewheel(canvas, tab)
+
         # Current Status Section
-        status_frame = ttk.LabelFrame(tab, text="Current Blockchain Status", padding=10)
+        status_frame = ttk.LabelFrame(
+            scrollable_frame, text="Current Blockchain Status", padding=10
+        )
         status_frame.pack(fill="x", padx=10, pady=5)
 
         self.calc_current_height_label = ttk.Label(
@@ -2079,11 +2199,11 @@ class FBDManager:
             refresh_frame,
             text="(Average block time: 2 minutes)",
             font=("Arial", 9, "italic"),
-            foreground="gray"
+            foreground="gray",
         ).pack(side="left", padx=(20, 0))
 
         # Input Method Selection
-        input_frame = ttk.LabelFrame(tab, text="Input Method", padding=10)
+        input_frame = ttk.LabelFrame(scrollable_frame, text="Input Method", padding=10)
         input_frame.pack(fill="x", padx=10, pady=5)
 
         self.calc_input_method = tk.StringVar(value="name")
@@ -2107,7 +2227,9 @@ class FBDManager:
         ).pack(side="left", padx=10)
 
         # Name Lookup Section
-        self.name_lookup_frame = ttk.LabelFrame(tab, text="Name Lookup", padding=10)
+        self.name_lookup_frame = ttk.LabelFrame(
+            scrollable_frame, text="Name Lookup", padding=10
+        )
         self.name_lookup_frame.pack(fill="x", padx=10, pady=5)
 
         name_entry_frame = ttk.Frame(self.name_lookup_frame)
@@ -2129,7 +2251,7 @@ class FBDManager:
 
         # Manual Entry Section
         self.manual_entry_frame = ttk.LabelFrame(
-            tab, text="Manual Block Heights", padding=10
+            scrollable_frame, text="Manual Block Heights", padding=10
         )
         self.manual_entry_frame.pack(fill="x", padx=10, pady=5)
 
@@ -2217,7 +2339,7 @@ class FBDManager:
 
         # Results Display
         results_frame = ttk.LabelFrame(
-            tab, text="📅 Calculated Date/Time Results", padding=10
+            scrollable_frame, text="📅 Calculated Date/Time Results", padding=10
         )
         results_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -2270,7 +2392,7 @@ class FBDManager:
 
     def refresh_calc_current_block(self, auto_retry=False):
         """Refresh current block height for calculator
-        
+
         Args:
             auto_retry: True if this is an automatic retry (don't show popups)
         """
@@ -2278,11 +2400,11 @@ class FBDManager:
         if self.calc_refresh_in_progress and not auto_retry:
             self.log("Block calculator: Refresh already in progress, skipping...")
             return None
-        
+
         if not auto_retry:
             self.calc_refresh_in_progress = True
             self.calc_refresh_retry_count = 0
-        
+
         result = self.rpc_call("getblockchaininfo")
 
         if result:
@@ -2303,20 +2425,22 @@ class FBDManager:
         else:
             # RPC call failed - determine why
             node_process_running = self.fbd_process and self.fbd_process.poll() is None
-            
+
             if node_process_running:
                 # Node process is running but RPC not ready yet
                 self.calc_node_status_label.config(
                     text="Node Status: Starting... ⏳", foreground="orange"
                 )
-                
+
                 # Auto-retry with limit
                 if self.calc_refresh_retry_count < self.calc_refresh_max_retries:
                     self.calc_refresh_retry_count += 1
                     self.log(
                         f"Block calculator: Node starting, retry {self.calc_refresh_retry_count}/{self.calc_refresh_max_retries} in 5s..."
                     )
-                    self.root.after(5000, lambda: self.refresh_calc_current_block(auto_retry=True))
+                    self.root.after(
+                        5000, lambda: self.refresh_calc_current_block(auto_retry=True)
+                    )
                 else:
                     # Max retries reached
                     self.log(
@@ -2327,7 +2451,7 @@ class FBDManager:
                     )
                     self.calc_refresh_in_progress = False
                     self.calc_refresh_retry_count = 0
-                    
+
                 return None
             else:
                 # Node process is not running
@@ -2359,13 +2483,25 @@ class FBDManager:
                             self.calc_refresh_in_progress = True
                             self.calc_refresh_retry_count = 0
                             # Wait 5 seconds for node to start, then begin auto-retry
-                            self.root.after(5000, lambda: self.refresh_calc_current_block(auto_retry=True))
+                            self.root.after(
+                                5000,
+                                lambda: self.refresh_calc_current_block(
+                                    auto_retry=True
+                                ),
+                            )
                         else:
                             # Node was started while dialog was open
-                            self.log("Block calculator: Node already started, beginning refresh...")
+                            self.log(
+                                "Block calculator: Node already started, beginning refresh..."
+                            )
                             self.calc_refresh_in_progress = True
                             self.calc_refresh_retry_count = 0
-                            self.root.after(2000, lambda: self.refresh_calc_current_block(auto_retry=True))
+                            self.root.after(
+                                2000,
+                                lambda: self.refresh_calc_current_block(
+                                    auto_retry=True
+                                ),
+                            )
 
                 return None
 
@@ -2381,7 +2517,7 @@ class FBDManager:
         if not name_info:
             # Check if node process is actually running
             node_process_running = self.fbd_process and self.fbd_process.poll() is None
-            
+
             if node_process_running:
                 # Node is running but RPC not ready or name doesn't exist
                 messagebox.showinfo(
@@ -2396,9 +2532,11 @@ class FBDManager:
                 if not self.calc_refresh_in_progress:
                     self.calc_refresh_in_progress = True
                     self.calc_refresh_retry_count = 0
-                    self.root.after(5000, lambda: self.refresh_calc_current_block(auto_retry=True))
+                    self.root.after(
+                        5000, lambda: self.refresh_calc_current_block(auto_retry=True)
+                    )
                 return
-            
+
             # Node is not running - offer to start it
             response = messagebox.askyesno(
                 "Node Not Running",
@@ -2421,7 +2559,10 @@ class FBDManager:
                     if not self.calc_refresh_in_progress:
                         self.calc_refresh_in_progress = True
                         self.calc_refresh_retry_count = 0
-                        self.root.after(5000, lambda: self.refresh_calc_current_block(auto_retry=True))
+                        self.root.after(
+                            5000,
+                            lambda: self.refresh_calc_current_block(auto_retry=True),
+                        )
                 else:
                     # Already running
                     messagebox.showinfo(
@@ -2480,37 +2621,37 @@ class FBDManager:
         # Try to extract all available block information
         # For auction states: height is when OPEN was mined
         # For REGISTERED: height might be registration block, need to check stats/history
-        
+
         # Try multiple possible field locations for better compatibility
         open_block = None
         registered_block = None
         renewal_block = info.get("renewal") or name_info.get("renewal")
-        
+
         # For REGISTERED names, try to get both auction start AND registration blocks
         if state == "REGISTERED":
             # The actual registration block - try multiple field names
             registered_block = (
-                info.get("registered") or 
-                info.get("height") or 
-                name_info.get("registered") or
-                name_info.get("height") or
-                info.get("claimed") or
-                info.get("claimedAt")
+                info.get("registered")
+                or info.get("height")
+                or name_info.get("registered")
+                or name_info.get("height")
+                or info.get("claimed")
+                or info.get("claimedAt")
             )
-            
+
             # Try to find when the auction originally started (if available)
             # This might be in stats, history, or auction fields
             stats = info.get("stats") or name_info.get("stats") or {}
             history = info.get("history") or name_info.get("history") or {}
-            
+
             open_block = (
-                stats.get("openedAt") or
-                stats.get("auctionStart") or
-                history.get("opened") or
-                info.get("auctionStart") or
-                name_info.get("auctionStart")
+                stats.get("openedAt")
+                or stats.get("auctionStart")
+                or history.get("opened")
+                or info.get("auctionStart")
+                or name_info.get("auctionStart")
             )
-            
+
             self.log(
                 f"Block calculator: '{name}' is REGISTERED - "
                 f"Registration block: {registered_block}, "
@@ -2520,15 +2661,15 @@ class FBDManager:
         else:
             # For active auction states
             open_block = info.get("height") or name_info.get("height")
-            
+
             # For some states, try alternative field names
             if open_block is None and state in ["BIDDING", "REVEAL", "CLOSED"]:
                 # Try other possible field names
                 open_block = (
-                    info.get("openBlock") or 
-                    info.get("start") or 
-                    name_info.get("start") or
-                    name_info.get("openBlock")
+                    info.get("openBlock")
+                    or info.get("start")
+                    or name_info.get("start")
+                    or name_info.get("openBlock")
                 )
 
         # If we have auction start block, calculate auction phases
@@ -2544,7 +2685,7 @@ class FBDManager:
             reveal_start = bid_start + BIDDING_PERIOD
             closed_block = reveal_start + REVEAL_PERIOD
             redeem_deadline = closed_block + REDEEM_PERIOD
-            
+
             if state == "REGISTERED":
                 self.log(
                     f"Block calculator: Auction timeline reconstructed from OPEN at {open_block}"
@@ -2555,7 +2696,11 @@ class FBDManager:
                 )
 
         # Fallback: if we didn't get height but got renewal, at least show that
-        if open_block is None and registered_block is None and renewal_block is not None:
+        if (
+            open_block is None
+            and registered_block is None
+            and renewal_block is not None
+        ):
             self.log(
                 f"Block calculator: Only have renewal info for '{name}': {renewal_block}"
             )
@@ -2569,7 +2714,7 @@ class FBDManager:
             self.log(f"  name_info keys: {list(name_info.keys())}")
             self.log(f"  info keys: {list(info.keys()) if info else 'info is empty'}")
             self.log(f"  Full data: {json.dumps(name_info, indent=2)}")
-            
+
             # Create context-aware error message
             if state in ["BIDDING", "REVEAL", "CLOSED", "OPENING"]:
                 error_msg = (
@@ -2589,7 +2734,7 @@ class FBDManager:
                     f"The name may have incomplete data in the blockchain.\n"
                     f"Check the log for full structure details."
                 )
-            
+
             messagebox.showwarning("Missing Block Data", error_msg)
             # Still try to display with what we have
 
@@ -2794,19 +2939,19 @@ class FBDManager:
             if open_block is not None:
                 row = calc_row("⏱️ Auction OPENED", open_block)
                 self.calc_results_tree.insert("", "end", values=row)
-                
+
             if bid_start is not None:
                 row = calc_row("💰 BIDDING Started", bid_start)
                 self.calc_results_tree.insert("", "end", values=row)
-                
+
             if reveal_start is not None:
                 row = calc_row("🔓 REVEAL Started", reveal_start)
                 self.calc_results_tree.insert("", "end", values=row)
-                
+
             if closed_block is not None:
                 row = calc_row("✅ Auction CLOSED", closed_block)
                 self.calc_results_tree.insert("", "end", values=row)
-            
+
             # Show the actual REGISTER transaction block
             if registered_block is not None:
                 row = calc_row("🎉 REGISTERED (Winner Claimed)", registered_block)
@@ -2814,8 +2959,15 @@ class FBDManager:
             elif open_block is not None and registered_block is None:
                 # Fallback: if we don't have separate registered_block, show it as unknown
                 self.calc_results_tree.insert(
-                    "", "end", 
-                    values=("🎉 REGISTERED (Winner Claimed)", "Unknown", "-", "-", "Data unavailable")
+                    "",
+                    "end",
+                    values=(
+                        "🎉 REGISTERED (Winner Claimed)",
+                        "Unknown",
+                        "-",
+                        "-",
+                        "Data unavailable",
+                    ),
                 )
 
             # Show renewal deadline
@@ -2910,11 +3062,8 @@ class FBDManager:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Enable mousewheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Enable mousewheel scrolling while cursor is over this tab
+        self._bind_canvas_mousewheel(canvas, tab)
 
         # Now use scrollable_frame instead of tab for all content
         # Configuration Profiles
@@ -3056,6 +3205,54 @@ class FBDManager:
 
         advanced_frame.columnconfigure(1, weight=1)
 
+        # Miner binary management
+        miner_frame = ttk.LabelFrame(
+            scrollable_frame, text="⛏️ Miner Binary Management", padding=10
+        )
+        miner_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(miner_frame, text="Miner Download URL:").grid(
+            row=0, column=0, sticky="w", pady=2
+        )
+        self.miner_download_url_var = tk.StringVar(value="https://l.woodburn.au/miner")
+        ttk.Entry(miner_frame, textvariable=self.miner_download_url_var, width=50).grid(
+            row=0, column=1, sticky="ew", pady=2
+        )
+
+        button_row = ttk.Frame(miner_frame)
+        button_row.grid(row=0, column=2, padx=5, sticky="n")
+
+        ttk.Button(
+            button_row,
+            text="Check Miner Version",
+            command=self.check_miner_version,
+        ).pack(fill="x", pady=(0, 3))
+
+        ttk.Button(
+            button_row,
+            text="Check & Auto-Update Miner",
+            command=self.download_or_update_miner,
+        ).pack(fill="x")
+
+        self.miner_path_label = ttk.Label(
+            miner_frame,
+            text=f"Target: {self.script_dir / 'miner'}",
+            font=("Arial", 8),
+            foreground="gray",
+        )
+        self.miner_path_label.grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(2, 0)
+        )
+
+        ttk.Label(
+            miner_frame,
+            text="Tip: Check compares local and latest binary by SHA256 before replacing.",
+            font=("Arial", 8),
+            foreground="blue",
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 2))
+
+        miner_frame.columnconfigure(1, weight=1)
+
         # Auto-restart
         restart_frame = ttk.LabelFrame(
             scrollable_frame, text="Auto-Restart", padding=10
@@ -3073,7 +3270,7 @@ class FBDManager:
             restart_frame,
             text="💡 Recommended for unattended operation and mining",
             font=("Arial", 8),
-            foreground="#006600"
+            foreground="#006600",
         ).pack(anchor="w", padx=(20, 0))
 
         ttk.Label(restart_frame, text="Restart delay (seconds):").pack(
@@ -3195,7 +3392,11 @@ class FBDManager:
 
     def toggle_mining_options(self):
         """Enable/disable mining options based on checkbox"""
-        if self.mining_enabled.get() and self.pool_miner_process and self.pool_miner_process.poll() is None:
+        if (
+            self.mining_enabled.get()
+            and self.pool_miner_process
+            and self.pool_miner_process.poll() is None
+        ):
             self.mining_enabled.set(False)
             messagebox.showwarning(
                 "Mining Mode Conflict",
@@ -3305,7 +3506,11 @@ class FBDManager:
                 messagebox.showwarning("Warning", "Node is already running!")
             return
 
-        if self.mining_enabled.get() and self.pool_miner_process and self.pool_miner_process.poll() is None:
+        if (
+            self.mining_enabled.get()
+            and self.pool_miner_process
+            and self.pool_miner_process.poll() is None
+        ):
             messagebox.showwarning(
                 "Mining Mode Conflict",
                 "Stop pool miner before starting the node with internal mining enabled.",
@@ -3351,7 +3556,7 @@ class FBDManager:
             self.stop_btn.config(state="normal")
             self.mining_checkbox.config(state="disabled")  # Disable while running
             self.status_label.config(text="Status: Starting...", foreground="orange")
-            
+
             # Update block calc tab status
             self.update_block_calc_status(starting=True)
 
@@ -3392,7 +3597,7 @@ class FBDManager:
             self.stop_btn.config(state="disabled")
             self.mining_checkbox.config(state="normal")  # Re-enable after stop
             self.status_label.config(text="Status: Stopped")
-            
+
             # Update block calc tab status
             self.update_block_calc_status(stopped=True)
 
@@ -3651,7 +3856,7 @@ class FBDManager:
         self.status_label.config(text="Status: Stopped", foreground="red")
         self.block_label.config(text="Block Height: -")
         self.peers_label.config(text="Peers: -")
-        
+
         # Update block calc tab status
         self.update_block_calc_status(stopped=True)
 
@@ -3662,31 +3867,32 @@ class FBDManager:
 
         self.log("⚠ Auto-restart disabled due to index-address chain error")
         self.log("⚠ Fix the issue before re-enabling auto-restart")
-        
+
         # Create custom dialog with action button
         dialog = tk.Toplevel(self.root)
         dialog.title("Index-Address Error - Chain Reset Required")
         dialog.geometry("600x400")
         dialog.transient(self.root)
         dialog.grab_set()
-        
+
         # Error message
         message_frame = ttk.Frame(dialog, padding=20)
         message_frame.pack(fill="both", expand=True)
-        
+
         ttk.Label(
             message_frame,
             text="⚠️ Node Crashed - Chain Reset Required",
             font=("Arial", 14, "bold"),
-            foreground="#cc0000"
+            foreground="#cc0000",
         ).pack(pady=(0, 10))
-        
+
         error_text = scrolledtext.ScrolledText(
             message_frame, height=10, wrap=tk.WORD, font=("Arial", 10)
         )
         error_text.pack(fill="both", expand=True)
-        
-        error_text.insert("1.0",
+
+        error_text.insert(
+            "1.0",
             "Node crashed because --index-address was enabled on an existing chain.\n\n"
             "Current chain has blocks but no address index exists.\n"
             "Auto-restart has been DISABLED to prevent crash loop.\n\n"
@@ -3702,29 +3908,25 @@ class FBDManager:
             "   • Restart the node manually\n"
             "   • Note: Wallet operations will NOT work without indexing\n\n"
             "═══════════════════════════════════════════════════════════\n\n"
-            "⚠️ IMPORTANT: Wallet address operations require --index-address!"
+            "⚠️ IMPORTANT: Wallet address operations require --index-address!",
         )
         error_text.config(state="disabled")
-        
+
         # Button frame
         button_frame = ttk.Frame(dialog, padding=10)
         button_frame.pack(fill="x")
-        
+
         def delete_and_close():
             dialog.destroy()
             self.delete_chain_data(auto_restart=True, from_error=True)
-        
+
         ttk.Button(
-            button_frame,
-            text="🗑️ Delete Chain & Restart",
-            command=delete_and_close
+            button_frame, text="🗑️ Delete Chain & Restart", command=delete_and_close
         ).pack(side="left", padx=5)
-        
-        ttk.Button(
-            button_frame,
-            text="Close",
-            command=dialog.destroy
-        ).pack(side="right", padx=5)
+
+        ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(
+            side="right", padx=5
+        )
 
     def delete_chain_data(self, auto_restart=False, from_error=False):
         """Delete blockchain chain data with safety checks and confirmation"""
@@ -3734,7 +3936,7 @@ class FBDManager:
                 "Node Running",
                 "The FBD node is currently running and must be stopped before deleting chain data.\n\n"
                 "Stop the node now?",
-                icon="warning"
+                icon="warning",
             )
             if stop_node:
                 self.log("🛑 Stopping node for chain data deletion...")
@@ -3744,7 +3946,7 @@ class FBDManager:
             else:
                 self.log("⚠ Chain deletion cancelled - node still running")
                 return
-        
+
         # Step 2: Determine chain directory paths
         # Check for custom datadir
         if (
@@ -3754,28 +3956,30 @@ class FBDManager:
             datadir = Path(self.custom_datadir_var.get().strip()).expanduser()
         else:
             datadir = Path.home() / ".fbd"
-        
+
         chain_dir = datadir / "chain"
         blocks_dir = datadir / "blocks"
-        
+
         # Step 3: Check if any chain data exists
         dirs_to_delete = []
         if chain_dir.exists():
             dirs_to_delete.append(("chain", chain_dir))
         if blocks_dir.exists():
             dirs_to_delete.append(("blocks", blocks_dir))
-        
+
         if not dirs_to_delete:
             messagebox.showinfo(
                 "No Chain Data",
                 f"No chain data directories exist in:\n{datadir}\n\n"
-                "Nothing to delete."
+                "Nothing to delete.",
             )
             return
-        
+
         # Step 4: Safety confirmation (unless called from error dialog)
         if not from_error:
-            dirs_list = "\n".join([f"📁 {name}: {path}" for name, path in dirs_to_delete])
+            dirs_list = "\n".join(
+                [f"📁 {name}: {path}" for name, path in dirs_to_delete]
+            )
             confirm = messagebox.askyesno(
                 "⚠️ Confirm Chain Deletion",
                 f"You are about to DELETE all blockchain data:\n\n"
@@ -3787,41 +3991,37 @@ class FBDManager:
                 f"  • NOT affect your wallets or keys\n\n"
                 f"This action CANNOT be undone!\n\n"
                 f"Are you absolutely sure?",
-                icon="warning"
+                icon="warning",
             )
             if not confirm:
                 self.log("⚠ Chain deletion cancelled by user")
                 return
-        
+
         # Step 5: Perform deletion
         try:
             self.log(f"🗑️ Deleting blockchain data from: {datadir}")
-            
+
             # Show progress
             progress_dialog = tk.Toplevel(self.root)
             progress_dialog.title("Deleting Chain Data")
             progress_dialog.geometry("450x180")
             progress_dialog.transient(self.root)
             progress_dialog.grab_set()
-            
+
             ttk.Label(
                 progress_dialog,
                 text="🗑️ Deleting blockchain data...",
-                font=("Arial", 11, "bold")
+                font=("Arial", 11, "bold"),
             ).pack(pady=20)
-            
-            progress_label = ttk.Label(
-                progress_dialog,
-                text="",
-                font=("Arial", 9)
-            )
+
+            progress_label = ttk.Label(progress_dialog, text="", font=("Arial", 9))
             progress_label.pack(pady=10)
-            
+
             # Delete each directory
             for name, dir_path in dirs_to_delete:
                 progress_label.config(text=f"Deleting {name}: {dir_path}")
                 progress_dialog.update()
-                
+
                 if sys.platform == "win32":
                     # On Windows/WSL
                     if dir_path.exists():
@@ -3829,20 +4029,20 @@ class FBDManager:
                 else:
                     # Native Linux
                     shutil.rmtree(dir_path)
-                
+
                 self.log(f"  ✅ Deleted {name} directory")
-            
+
             progress_dialog.destroy()
-            
+
             self.log("✅ All chain data deleted successfully")
-            
+
             # Step 6: Success confirmation with restart option
             if auto_restart or messagebox.askyesno(
                 "✅ Chain Data Deleted",
                 f"Chain data has been successfully deleted!\n\n"
                 f"The node will need to resync from scratch when started.\n\n"
                 f"Would you like to restart the node now?",
-                icon="info"
+                icon="info",
             ):
                 self.log("🔄 Restarting node after chain deletion...")
                 time.sleep(1)
@@ -3851,9 +4051,9 @@ class FBDManager:
                 messagebox.showinfo(
                     "Ready to Resync",
                     "Chain data deleted.\n\n"
-                    "Start the node manually when ready to begin resyncing."
+                    "Start the node manually when ready to begin resyncing.",
                 )
-        
+
         except PermissionError as e:
             self.log(f"❌ Permission denied deleting chain: {e}")
             messagebox.showerror(
@@ -3861,7 +4061,7 @@ class FBDManager:
                 f"Could not delete chain data due to permissions.\n\n"
                 f"Error: {e}\n\n"
                 f"Try running with appropriate permissions or delete manually:\n"
-                f"rm -rf {datadir}/chain {datadir}/blocks"
+                f"rm -rf {datadir}/chain {datadir}/blocks",
             )
         except Exception as e:
             self.log(f"❌ Error deleting chain: {e}")
@@ -3870,7 +4070,7 @@ class FBDManager:
                 f"Failed to delete chain data.\n\n"
                 f"Error: {e}\n\n"
                 f"You may need to delete manually:\n"
-                f"rm -rf {datadir}/chain {datadir}/blocks"
+                f"rm -rf {datadir}/chain {datadir}/blocks",
             )
 
     def show_database_lock_error(self):
@@ -4057,7 +4257,7 @@ class FBDManager:
                     blocks = info.get("blocks", "-")
                     self.status_label.config(text="Status: Running", foreground="green")
                     self.block_label.config(text=f"Block Height: {blocks}")
-                    
+
                     # Update block calc tab with current height
                     self.update_block_calc_status(current_height=blocks)
 
@@ -4113,18 +4313,22 @@ class FBDManager:
                     # Update block calc as stopped
                     self.update_block_calc_status(stopped=True)
 
-    def update_block_calc_status(self, current_height=None, stopped=False, starting=False):
+    def update_block_calc_status(
+        self, current_height=None, stopped=False, starting=False
+    ):
         """Update block calculator tab status automatically
-        
+
         Args:
             current_height: Current block height (int or string)
             stopped: True if node is stopped
             starting: True if node is starting
         """
         # Check if block calc UI elements exist
-        if not hasattr(self, 'calc_node_status_label') or not hasattr(self, 'calc_current_height_label'):
+        if not hasattr(self, "calc_node_status_label") or not hasattr(
+            self, "calc_current_height_label"
+        ):
             return
-        
+
         try:
             if stopped:
                 # Node stopped
@@ -4270,11 +4474,63 @@ class FBDManager:
             return False
         return True
 
-    def list_wallets(self):
-        """List all wallets using fbdctl and allow selection"""
+    def update_wallet_dropdown(self, wallets):
+        """Update active wallet dropdown values without changing selection unexpectedly."""
+        if not hasattr(self, "wallet_combo"):
+            return
+
+        wallet_list = [w for w in wallets if w]
+        if not wallet_list:
+            wallet_list = ["main"]
+
+        current_wallet = self.wallet_name_var.get().strip()
+        if current_wallet and current_wallet not in wallet_list:
+            wallet_list.append(current_wallet)
+
+        self.wallet_combo["values"] = wallet_list
+
+        if current_wallet:
+            self.wallet_name_var.set(current_wallet)
+        else:
+            self.wallet_name_var.set(wallet_list[0])
+
+    def on_active_wallet_selected(self, _event=None):
+        """Handle active wallet changes from the dropdown."""
+        selected_wallet = self.wallet_name_var.get().strip()
+        if not selected_wallet:
+            return
+
+        self.log(f"Active wallet set to: {selected_wallet}")
+        self.get_wallet_info()
+        self.refresh_auction_balance()
+
+    def get_wallet_address(self, wallet):
+        """Get address for a specific wallet, returning None when unavailable."""
+        cmd_info, _ = self.get_fbdctl_command("--wallet", wallet, "getwalletinfo")
+        result_info = subprocess.run(
+            cmd_info,
+            capture_output=True,
+            text=True,
+            cwd=Path(self.fbd_path_var.get()).parent,
+        )
+
+        if result_info.returncode != 0:
+            error_msg = (result_info.stderr or result_info.stdout or "").strip()
+            raise RuntimeError(error_msg or "Unknown error retrieving wallet info")
+
+        response_info = json.loads(result_info.stdout)
+        data_info = (
+            response_info.get("result", {})
+            if isinstance(response_info, dict)
+            else response_info
+        )
+        return data_info.get("address")
+
+    def list_wallets(self, show_feedback=True):
+        """Refresh wallet list and populate the active-wallet dropdown."""
         # Check if node is running
         if not self.check_node_running():
-            return
+            return []
 
         try:
             cmd, fbdctl_path = self.get_fbdctl_command("listwallets")
@@ -4294,141 +4550,218 @@ class FBDManager:
             if result.returncode == 0:
                 if not result.stdout.strip():
                     self.log("No wallets found (empty response)")
-                    messagebox.showinfo("Wallets", "No wallets found")
-                    return
+                    if show_feedback:
+                        messagebox.showinfo("Wallets", "No wallets found")
+                    return []
 
                 try:
                     response = json.loads(result.stdout)
-                    # Extract the "result" field from the response
                     wallets = (
                         response.get("result", [])
                         if isinstance(response, dict)
                         else response
                     )
                     if wallets:
+                        wallets = [str(w) for w in wallets if str(w).strip()]
                         self.log(f"Wallets: {', '.join(wallets)}")
-                        # Show clickable wallet selection dialog
-                        self.show_wallet_selection_dialog(wallets)
-                    else:
-                        self.log("No wallets found")
+                        self.update_wallet_dropdown(wallets)
+                        if show_feedback:
+                            messagebox.showinfo(
+                                "Wallets Refreshed",
+                                f"Loaded {len(wallets)} wallet(s) into Active Wallet dropdown.",
+                            )
+                        return wallets
+
+                    self.log("No wallets found")
+                    if show_feedback:
                         messagebox.showinfo("Wallets", "No wallets found")
+                    return []
                 except json.JSONDecodeError as je:
                     self.log(f"Error parsing wallet list JSON: {je}")
                     self.log(f"Raw output: {result.stdout}")
-                    messagebox.showwarning(
-                        "Warning",
-                        f"Could not parse wallet list\nRaw output: {result.stdout}",
-                    )
-            else:
-                error_msg = result.stderr
-                self.log(
-                    f"Error listing wallets (code {result.returncode}): {error_msg}"
-                )
+                    if show_feedback:
+                        messagebox.showwarning(
+                            "Warning",
+                            f"Could not parse wallet list\nRaw output: {result.stdout}",
+                        )
+                    return []
 
-                # Check if node is not running
-                if "Connection failed" in error_msg or "Couldn't connect" in error_msg:
+            error_msg = result.stderr
+            self.log(f"Error listing wallets (code {result.returncode}): {error_msg}")
+
+            if "Connection failed" in error_msg or "Couldn't connect" in error_msg:
+                if show_feedback:
                     messagebox.showwarning(
                         "Node Not Running",
                         "The FBD node is not running!\n\n"
                         "Wallet operations require a running node.\n\n"
                         "Please start the node from the 'Node & Mining' tab first.",
                     )
-                    return
+                return []
 
-                # Check if it's an index-address issue
-                if not self.check_index_address_error(error_msg):
-                    messagebox.showwarning(
-                        "Warning", f"Could not retrieve wallet list\nError: {error_msg}"
-                    )
+            if not self.check_index_address_error(error_msg) and show_feedback:
+                messagebox.showwarning(
+                    "Warning", f"Could not retrieve wallet list\nError: {error_msg}"
+                )
+            return []
         except Exception as e:
             self.log(f"Exception listing wallets: {type(e).__name__}: {e}")
-            messagebox.showwarning("Warning", f"Could not retrieve wallet list: {e}")
+            if show_feedback:
+                messagebox.showwarning(
+                    "Warning", f"Could not retrieve wallet list: {e}"
+                )
+            return []
 
-    def show_wallet_selection_dialog(self, wallets):
-        """Show a dialog with clickable wallet list for selection"""
+    def copy_wallet_address_dialog(self):
+        """Copy wallet address from any available wallet without changing active wallet."""
+        if not self.check_node_running():
+            return
+
+        wallets = self.list_wallets(show_feedback=False)
+        if not wallets:
+            messagebox.showinfo(
+                "No Wallets", "No wallets available. Create or import a wallet first."
+            )
+            return
+
         dialog = tk.Toplevel(self.root)
-        dialog.title("Select Active Wallet")
-        dialog.geometry("400x300")
+        dialog.title("Copy Wallet Address")
+        dialog.geometry("620x260")
         dialog.transient(self.root)
         dialog.grab_set()
 
-        # Header label
-        header_label = ttk.Label(
+        ttk.Label(
             dialog,
-            text="Click on a wallet to set it as the active wallet:",
+            text="Select wallet to copy its address (does not change active wallet):",
             font=("Arial", 10, "bold"),
-        )
-        header_label.pack(pady=10, padx=10)
+        ).pack(pady=(12, 8), padx=10, anchor="w")
 
-        # Current active wallet label
-        current_wallet = self.wallet_name_var.get()
-        current_label = ttk.Label(
+        selected_wallet_var = tk.StringVar(
+            value=self.wallet_name_var.get() or wallets[0]
+        )
+        wallet_picker = ttk.Combobox(
             dialog,
-            text=f"Current active wallet: {current_wallet}",
-            foreground="#0066cc",
-            font=("Arial", 9),
+            textvariable=selected_wallet_var,
+            values=wallets,
+            state="readonly",
+            width=50,
         )
-        current_label.pack(pady=(0, 10), padx=10)
+        wallet_picker.pack(padx=10, fill="x")
 
-        # Create a frame for the wallet list with scrollbar
-        list_frame = ttk.Frame(dialog)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        result_label = ttk.Label(dialog, text="")
+        result_label.pack(pady=(8, 4), padx=10, anchor="w")
 
-        # Create listbox with scrollbar
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side="right", fill="y")
+        # Keep picker on a valid wallet if active wallet isn't in the list.
+        if selected_wallet_var.get() not in wallets:
+            selected_wallet_var.set(wallets[0])
 
-        wallet_listbox = tk.Listbox(
-            list_frame,
-            yscrollcommand=scrollbar.set,
-            font=("Arial", 10),
-            activestyle="dotbox",
-            selectmode="single",
-            height=10,
-        )
-        wallet_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=wallet_listbox.yview)
-
-        # Populate listbox with wallets
-        for wallet in wallets:
-            wallet_listbox.insert(tk.END, wallet)
-            # Highlight current active wallet
-            if wallet == current_wallet:
-                wallet_listbox.selection_set(wallets.index(wallet))
-                wallet_listbox.see(wallets.index(wallet))
-
-        def on_wallet_select(event=None):
-            """Handle wallet selection"""
-            selection = wallet_listbox.curselection()
-            if selection:
-                selected_wallet = wallet_listbox.get(selection[0])
-                self.wallet_name_var.set(selected_wallet)
-                self.log(f"Active wallet set to: {selected_wallet}")
-                dialog.destroy()
-                
-                # Automatically refresh wallet info and balance on both tabs
-                self.get_wallet_info()
-                self.refresh_auction_balance()
-                
-                messagebox.showinfo(
-                    "Wallet Selected",
-                    f"Active wallet set to: {selected_wallet}\n\n"
-                    f"Wallet info and balance have been updated.",
+        def get_selected_wallet_address():
+            selected_wallet = selected_wallet_var.get().strip()
+            if not selected_wallet:
+                messagebox.showwarning(
+                    "Wallet Required", "Please select a wallet first."
                 )
+                return None, None
 
-        # Bind double-click and Enter key
-        wallet_listbox.bind("<Double-Button-1>", on_wallet_select)
-        wallet_listbox.bind("<Return>", on_wallet_select)
+            try:
+                address = self.get_wallet_address(selected_wallet)
+                if not address:
+                    messagebox.showwarning(
+                        "Address Unavailable",
+                        f"Wallet '{selected_wallet}' did not return an address.",
+                    )
+                    return None, None
+                return selected_wallet, address
+            except Exception as e:
+                self.log(
+                    f"Error copying wallet address for '{selected_wallet}': {type(e).__name__}: {e}",
+                    level="error",
+                )
+                if not self.check_index_address_error(str(e)):
+                    messagebox.showerror(
+                        "Copy Address Failed",
+                        f"Could not get address for wallet '{selected_wallet}'.\n\nError: {e}",
+                    )
+                return None, None
 
-        # Button frame
+        def copy_to_clipboard(address):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(address)
+            self.root.update()
+
+        def copy_selected_wallet_address():
+            selected_wallet, address = get_selected_wallet_address()
+            if not address:
+                return
+
+            copy_to_clipboard(address)
+            result_label.config(text=f"Copied address for wallet '{selected_wallet}'.")
+            self.log(f"Copied address for wallet '{selected_wallet}': {address}")
+
+        def copy_into_send_to():
+            selected_wallet, address = get_selected_wallet_address()
+            if not address:
+                return
+
+            copy_to_clipboard(address)
+            self.send_address_var.set(address)
+            result_label.config(
+                text=f"Copied address and filled Send To for wallet '{selected_wallet}'."
+            )
+            self.log(
+                f"Filled Send To address from wallet '{selected_wallet}': {address}"
+            )
+
+        def copy_into_pool_miner_address():
+            selected_wallet, address = get_selected_wallet_address()
+            if not address:
+                return
+
+            copy_to_clipboard(address)
+            self.pool_miner_address_var.set(address)
+            result_label.config(
+                text=f"Copied address and filled Pool Miner Address for wallet '{selected_wallet}'."
+            )
+            self.log(
+                f"Filled Pool Miner Address from wallet '{selected_wallet}': {address}"
+            )
+
+        def copy_into_miner_address():
+            selected_wallet, address = get_selected_wallet_address()
+            if not address:
+                return
+
+            copy_to_clipboard(address)
+            self.miner_address_var.set(address)
+            result_label.config(
+                text=f"Copied address and filled Miner Address for wallet '{selected_wallet}'."
+            )
+            self.log(f"Filled Miner Address from wallet '{selected_wallet}': {address}")
+
         button_frame = ttk.Frame(dialog)
         button_frame.pack(pady=(0, 10))
 
-        select_btn = ttk.Button(button_frame, text="Select", command=on_wallet_select)
-        select_btn.pack(side="left", padx=5)
+        ttk.Button(
+            button_frame, text="Copy Address", command=copy_selected_wallet_address
+        ).pack(side="left", padx=5)
 
-        cancel_btn = ttk.Button(button_frame, text="Cancel", command=dialog.destroy)
-        cancel_btn.pack(side="left", padx=5)
+        ttk.Button(
+            button_frame, text="Copy -> Send To", command=copy_into_send_to
+        ).pack(side="left", padx=5)
+
+        ttk.Button(
+            button_frame,
+            text="Copy -> Pool Miner Address",
+            command=copy_into_pool_miner_address,
+        ).pack(side="left", padx=5)
+
+        ttk.Button(
+            button_frame, text="Copy -> Miner Address", command=copy_into_miner_address
+        ).pack(side="left", padx=5)
+
+        ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(
+            side="left", padx=5
+        )
 
         # Center dialog on parent window
         dialog.update_idletasks()
@@ -4449,7 +4782,7 @@ class FBDManager:
         # Check if node is running
         if not self.check_node_running():
             return
-        
+
         name = tk.simpledialog.askstring("Create Wallet", "Enter wallet name:")
         if name:
             result = self.rpc_call("createwallet", [name])
@@ -4458,13 +4791,14 @@ class FBDManager:
                 if "mnemonic" in result:
                     self.show_seed_dialog(name, result["mnemonic"])
                 self.wallet_name_var.set(name)
+                self.list_wallets(show_feedback=False)
 
     def import_wallet(self):
         """Import an existing wallet from seed phrase"""
         # Check if node is running
         if not self.check_node_running():
             return
-        
+
         # Create dialog for wallet import
         dialog = tk.Toplevel(self.root)
         dialog.title("Import Wallet")
@@ -4517,6 +4851,7 @@ class FBDManager:
                         f"Wallet '{wallet_name}' restored from mnemonic successfully!",
                     )
                     self.wallet_name_var.set(wallet_name)
+                    self.list_wallets(show_feedback=False)
                     dialog.destroy()
                 else:
                     stderr_msg = (result.stderr or "").strip()
@@ -4594,6 +4929,7 @@ class FBDManager:
                     "Success", f"Wallet '{wallet}' deleted successfully"
                 )
                 self.wallet_name_var.set("")
+                self.list_wallets(show_feedback=False)
             else:
                 error_msg = result.stderr
                 self.log(f"Error deleting wallet: {error_msg}")
@@ -4843,7 +5179,7 @@ class FBDManager:
 
         ttk.Button(
             btn_frame,
-            text="📋 List Available Wallets",
+            text="↻ Refresh Wallet Dropdown",
             command=on_list_wallets,
             width=25,
         ).grid(row=0, column=0, padx=5, pady=5)
@@ -5806,7 +6142,7 @@ class FBDManager:
                     )
                     self.names_text.insert(
                         tk.END,
-                        "Click 'List Wallets' in Wallet tab to see available wallets,\n",
+                        "Open the Active Wallet dropdown in Wallet tab to see available wallets,\n",
                     )
                     self.names_text.insert(
                         tk.END, "or 'Create Wallet' to create a new one."
@@ -5836,6 +6172,7 @@ class FBDManager:
             "pool_miner_address": "",
             "pool_miner_host": "pool.woodburn.au",
             "pool_miner_threads": "0",
+            "miner_download_url": "https://l.woodburn.au/miner",
             "index_tx": True,
             "index_address": False,
             "index_auctions": False,
@@ -5873,6 +6210,7 @@ class FBDManager:
             "pool_miner_address": self.pool_miner_address_var.get(),
             "pool_miner_host": self.pool_miner_host_var.get(),
             "pool_miner_threads": self.pool_miner_threads_var.get(),
+            "miner_download_url": self.miner_download_url_var.get().strip(),
             "index_tx": self.index_tx_var.get(),
             "index_address": self.index_address_var.get(),
             "index_auctions": self.index_auctions_var.get(),
@@ -5908,7 +6246,9 @@ class FBDManager:
         self.agent_var.set(self.config.get("agent", "tiMaxal"))
         self.mining_enabled.set(self.config.get("mining_enabled", True))
         self.miner_address_var.set(self.config.get("miner_address", ""))
-        self.miner_threads_var.set(self.config.get("miner_threads", default_miner_threads))
+        self.miner_threads_var.set(
+            self.config.get("miner_threads", default_miner_threads)
+        )
         self.pool_miner_address_var.set(
             self.config.get("pool_miner_address", self.config.get("miner_address", ""))
         )
@@ -5916,10 +6256,14 @@ class FBDManager:
             self.config.get("pool_miner_host", "pool.woodburn.au")
         )
         self.pool_miner_threads_var.set(self.config.get("pool_miner_threads", "0"))
+        self.miner_download_url_var.set(
+            self.config.get("miner_download_url", "https://l.woodburn.au/miner")
+        )
         self.index_tx_var.set(self.config.get("index_tx", True))
         self.index_address_var.set(self.config.get("index_address", False))
         self.index_auctions_var.set(self.config.get("index_auctions", False))
         self.wallet_name_var.set(self.config.get("wallet_name", "main"))
+        self.update_wallet_dropdown([self.wallet_name_var.get() or "main"])
         self.rpc_host_var.set(self.config.get("rpc_host", "127.0.0.1"))
         self.rpc_port_var.set(self.config.get("rpc_port", "32869"))
         self.auto_restart_var.set(self.config.get("auto_restart", False))
@@ -5977,6 +6321,10 @@ class FBDManager:
                 "mining_enabled": True,
                 "miner_address": "fb1qp979k4ell5hvaktk5e3d6man66jrz2ucvkt748",
                 "miner_threads": default_miner_threads,
+                "pool_miner_address": "",
+                "pool_miner_host": "pool.woodburn.au",
+                "pool_miner_threads": "0",
+                "miner_download_url": "https://l.woodburn.au/miner",
                 "index_tx": True,
                 "index_address": False,
                 "index_auctions": False,
@@ -5990,6 +6338,226 @@ class FBDManager:
             }
             self.load_saved_settings()
             messagebox.showinfo("Success", "Settings reset to defaults")
+
+    def download_or_update_miner(self):
+        """Check latest miner and auto-update only when a newer/different binary exists"""
+        url = self.miner_download_url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a miner download URL.")
+            return
+
+        if not (url.startswith("http://") or url.startswith("https://")):
+            messagebox.showwarning(
+                "Invalid URL",
+                "Miner download URL must start with http:// or https://",
+            )
+            return
+
+        self.log(f"Checking miner version/update source: {url}")
+        threading.Thread(
+            target=self._download_or_update_miner_thread,
+            args=(url,),
+            daemon=True,
+        ).start()
+
+    def check_miner_version(self):
+        """Check whether local miner matches the latest downloadable binary"""
+        url = self.miner_download_url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a miner download URL.")
+            return
+
+        if not (url.startswith("http://") or url.startswith("https://")):
+            messagebox.showwarning(
+                "Invalid URL",
+                "Miner download URL must start with http:// or https://",
+            )
+            return
+
+        self.log(f"Checking miner version against: {url}")
+        threading.Thread(
+            target=self._check_miner_version_thread,
+            args=(url,),
+            daemon=True,
+        ).start()
+
+    def _get_file_sha256(self, path):
+        """Return SHA256 for a file path"""
+        hasher = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def _get_miner_version_string(self, miner_path):
+        """Best-effort version string extraction from miner binary"""
+        try:
+            if sys.platform != "win32":
+                os.chmod(miner_path, 0o755)
+            result = subprocess.run(
+                [str(miner_path), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            output = (result.stdout or result.stderr or "").strip()
+            if output:
+                return output.splitlines()[0][:200]
+        except Exception:
+            pass
+        return "unknown"
+
+    def _check_miner_version_thread(self, url):
+        """Background thread: compare local and latest miner hashes/versions"""
+        miner_path = self.script_dir / "miner"
+        temp_path = self.script_dir / "miner.check"
+
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            if not temp_path.exists() or temp_path.stat().st_size == 0:
+                raise RuntimeError("Downloaded check file is empty.")
+
+            remote_hash = self._get_file_sha256(temp_path)
+            remote_ver = self._get_miner_version_string(temp_path)
+
+            if not miner_path.exists():
+                self.log("Local miner not found. Update required.")
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Miner Version Check",
+                        "Local miner not found.\n\n"
+                        f"Latest version: {remote_ver}\n"
+                        f"SHA256: {remote_hash[:16]}...\n\n"
+                        "Use 'Check & Auto-Update Miner' to install.",
+                    ),
+                )
+                return
+
+            local_hash = self._get_file_sha256(miner_path)
+            local_ver = self._get_miner_version_string(miner_path)
+
+            if local_hash == remote_hash:
+                self.log("Miner version check: already up to date.")
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Miner Version Check",
+                        "Miner is already up to date.\n\n"
+                        f"Local version: {local_ver}\n"
+                        f"Latest version: {remote_ver}\n"
+                        f"SHA256: {local_hash[:16]}...",
+                    ),
+                )
+            else:
+                self.log("Miner version check: update available.")
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Miner Version Check",
+                        "Update available for miner.\n\n"
+                        f"Local version: {local_ver}\n"
+                        f"Latest version: {remote_ver}\n\n"
+                        "Use 'Check & Auto-Update Miner' to apply.",
+                    ),
+                )
+        except Exception as e:
+            self.log(f"Miner version check failed: {e}", level="error")
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Version Check Failed",
+                    f"Failed to check miner version:\n{e}",
+                ),
+            )
+        finally:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
+
+    def _download_or_update_miner_thread(self, url):
+        """Background thread: download latest miner and replace only when hash differs"""
+        miner_path = self.script_dir / "miner"
+        temp_path = self.script_dir / "miner.download"
+        backup_path = self.script_dir / (
+            f"miner.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            if not temp_path.exists() or temp_path.stat().st_size == 0:
+                raise RuntimeError("Downloaded miner file is empty.")
+
+            remote_hash = self._get_file_sha256(temp_path)
+            remote_ver = self._get_miner_version_string(temp_path)
+
+            if miner_path.exists():
+                local_hash = self._get_file_sha256(miner_path)
+                local_ver = self._get_miner_version_string(miner_path)
+                if local_hash == remote_hash:
+                    self.log("Miner already up to date (hash match).")
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            "Miner Up To Date",
+                            "No update needed. Local miner matches latest.\n\n"
+                            f"Version: {local_ver}\n"
+                            f"SHA256: {local_hash[:16]}...",
+                        ),
+                    )
+                    return
+
+            if miner_path.exists():
+                miner_path.replace(backup_path)
+                self.log(f"Backed up existing miner to: {backup_path.name}")
+
+            temp_path.replace(miner_path)
+
+            if sys.platform != "win32":
+                os.chmod(miner_path, 0o755)
+
+            new_ver = self._get_miner_version_string(miner_path)
+            self.log(f"Miner updated successfully: {miner_path}")
+            self.root.after(
+                0,
+                lambda: messagebox.showinfo(
+                    "Miner Updated",
+                    "Miner downloaded/updated successfully.\n\n"
+                    f"Version: {new_ver}\n"
+                    f"SHA256: {remote_hash[:16]}...\n"
+                    f"Path: {miner_path}",
+                ),
+            )
+        except Exception as e:
+            self.log(f"Miner update failed: {e}", level="error")
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Miner Update Failed", f"Failed to download/update miner:\n{e}"
+                ),
+            )
+        finally:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
 
     def check_running_instances(self):
         """Check for running fbd instances"""
@@ -6185,6 +6753,10 @@ class FBDManager:
                 "mining_enabled": self.mining_enabled.get(),
                 "miner_address": self.miner_address_var.get(),
                 "miner_threads": self.miner_threads_var.get(),
+                "pool_miner_address": self.pool_miner_address_var.get(),
+                "pool_miner_host": self.pool_miner_host_var.get(),
+                "pool_miner_threads": self.pool_miner_threads_var.get(),
+                "miner_download_url": self.miner_download_url_var.get().strip(),
                 "index_tx": self.index_tx_var.get(),
                 "index_address": self.index_address_var.get(),
                 "index_auctions": self.index_auctions_var.get(),
@@ -6244,6 +6816,10 @@ class FBDManager:
                 "mining_enabled": self.mining_enabled.get(),
                 "miner_address": self.miner_address_var.get(),
                 "miner_threads": self.miner_threads_var.get(),
+                "pool_miner_address": self.pool_miner_address_var.get(),
+                "pool_miner_host": self.pool_miner_host_var.get(),
+                "pool_miner_threads": self.pool_miner_threads_var.get(),
+                "miner_download_url": self.miner_download_url_var.get().strip(),
                 "index_tx": self.index_tx_var.get(),
                 "index_address": self.index_address_var.get(),
                 "index_auctions": self.index_auctions_var.get(),
@@ -6628,7 +7204,7 @@ class FBDManager:
                 # Use platform-appropriate command
                 if sys.platform == "win32":
                     # On Windows, use subprocess.Popen to avoid blocking
-                    subprocess.Popen(['notepad.exe', log_path_str])
+                    subprocess.Popen(["notepad.exe", log_path_str])
                 else:
                     # On Linux/WSL, convert path to Windows format using wslpath
                     try:
@@ -6732,6 +7308,8 @@ FBD Node Manager v3.1.0 - Quick Help
     • Set pool wallet address & host
     • Click "Start Pool Miner" button
     • Consistent payouts, no full node needed
+    • Settings -> Check Miner Version (compare local vs latest)
+    • Settings -> Check & Auto-Update Miner (updates only when needed)
     → For casual miners
 
     ⚠️ Cannot run BOTH simultaneously!
@@ -6751,6 +7329,7 @@ FBD Node Manager v3.1.0 - Quick Help
 • Save/load configurations
 • Export/import for backup
 • Configure auto-restart & indexing
+• Manage miner URL and safe version-checked auto-update
 
 📂 FILES LOCATION:
 • Config: ~/.fbdgui/fbdgui_config.json
@@ -6938,7 +7517,9 @@ to access config and log files!
             self.stop_jobs_auto_refresh()
 
         node_running = self.fbd_process and self.fbd_process.poll() is None
-        pool_running = self.pool_miner_process and self.pool_miner_process.poll() is None
+        pool_running = (
+            self.pool_miner_process and self.pool_miner_process.poll() is None
+        )
 
         if node_running or pool_running:
             if messagebox.askyesno(
@@ -7010,7 +7591,7 @@ to access config and log files!
     def _get_current_height_silent(self):
         """
         Get current block height without prompting user or updating UI
-        
+
         Returns:
             int: Current block height, or None if node not running
         """
@@ -7403,17 +7984,17 @@ to access config and log files!
         """
         Scan wallet for active/pending auctions
         Returns list of auction dicts with name, state, and bid info
-        
+
         Enhanced to find:
         1. Names already registered to wallet (from getnames)
         2. Names wallet has bid on (from wallet transactions)
         """
         auctions = []
         found_names = set()
-        
+
         try:
             self.log(f"🔍 Scanning wallet '{wallet}' for auction activity...")
-            
+
             # STEP 1: Get registered names from wallet (existing logic)
             self.log("  → Checking registered names...")
             try:
@@ -7457,7 +8038,11 @@ to access config and log files!
                 )
                 if result.returncode == 0:
                     response = json.loads(result.stdout)
-                    wallet_info = response.get("result", {}) if isinstance(response, dict) else response
+                    wallet_info = (
+                        response.get("result", {})
+                        if isinstance(response, dict)
+                        else response
+                    )
                     wallet_address = wallet_info.get("address", "N/A")
                     self.log(f"    Wallet '{wallet}' address: {wallet_address}")
             except Exception as e:
@@ -7485,38 +8070,44 @@ to access config and log files!
 
                     auction_tx_types = ["OPEN", "BID", "REVEAL", "REGISTER", "REDEEM"]
                     tx_count = 0
-                    
+
                     self.log(f"    Scanning {len(txs)} transaction(s)...")
-                    
+
                     # Debug: Show first few transaction structures
                     if len(txs) > 0 and len(found_names) == 0:
                         for i, tx in enumerate(txs[:3]):
-                            self.log(f"    DEBUG: Sample tx {i+1} structure: {json.dumps(tx, indent=2)[:400]}...")
-                    
+                            self.log(
+                                f"    DEBUG: Sample tx {i+1} structure: {json.dumps(tx, indent=2)[:400]}..."
+                            )
+
                     for tx in txs:
                         tx_type = tx.get("type", "")
-                        
+
                         # Check if this is a covenant transaction (type="covenant")
                         # or if the type directly matches an auction action
-                        is_covenant = (tx_type == "covenant") or (tx_type in auction_tx_types)
-                        
+                        is_covenant = (tx_type == "covenant") or (
+                            tx_type in auction_tx_types
+                        )
+
                         if is_covenant:
                             # Try multiple methods to extract name
                             name = None
-                            
+
                             # Method 1: Parse covenants array (e.g., ["BID fb.d"])
                             covenants_array = tx.get("covenants", [])
                             if covenants_array and isinstance(covenants_array, list):
                                 for covenant_str in covenants_array:
                                     if isinstance(covenant_str, str):
                                         # Format: "ACTION name" (e.g., "BID fb.d")
-                                        parts = covenant_str.split(None, 1)  # Split on first whitespace
+                                        parts = covenant_str.split(
+                                            None, 1
+                                        )  # Split on first whitespace
                                         if len(parts) >= 2:
                                             action = parts[0].upper()
                                             if action in auction_tx_types:
                                                 name = parts[1]
                                                 break
-                            
+
                             # Method 2: covenant.items[0]
                             if not name:
                                 covenant = tx.get("covenant", {})
@@ -7525,17 +8116,19 @@ to access config and log files!
                                     if items and len(items) > 0:
                                         # Items might be hex-encoded
                                         name = items[0]
-                                    
+
                             # Method 3: Check 'name' field directly in tx
                             if not name:
                                 name = tx.get("name")
-                            
+
                             # Method 4: Check covenant.action or covenant.name
                             if not name:
                                 covenant = tx.get("covenant", {})
                                 if covenant:
-                                    name = covenant.get("name") or covenant.get("action")
-                            
+                                    name = covenant.get("name") or covenant.get(
+                                        "action"
+                                    )
+
                             # Method 5: Try outputs[].covenant.items[]
                             if not name:
                                 outputs = tx.get("outputs", [])
@@ -7547,30 +8140,37 @@ to access config and log files!
                                             if out_items and len(out_items) > 0:
                                                 name = out_items[0]
                                                 break
-                            
+
                             # Decode hex if needed
                             if name and isinstance(name, str):
                                 # Try hex decode if it looks like hex
-                                if len(name) > 0 and all(c in '0123456789abcdefABCDEF' for c in name):
+                                if len(name) > 0 and all(
+                                    c in "0123456789abcdefABCDEF" for c in name
+                                ):
                                     try:
-                                        decoded = bytes.fromhex(name).decode('utf-8')
+                                        decoded = bytes.fromhex(name).decode("utf-8")
                                         name = decoded
                                     except:
                                         pass  # Keep original if decode fails
-                            
+
                             # Add name to found set if valid
                             if name and isinstance(name, str) and len(name) > 0:
                                 if name not in found_names:
                                     found_names.add(name)
                                     tx_count += 1
-                                    self.log(f"      Found name '{name}' from transaction")
-                    
-                    self.log(f"    Found {tx_count} additional name(s) from transactions")
+                                    self.log(
+                                        f"      Found name '{name}' from transaction"
+                                    )
+
+                    self.log(
+                        f"    Found {tx_count} additional name(s) from transactions"
+                    )
                 else:
                     self.log(f"    Could not list transactions: {result.stderr}")
             except Exception as e:
                 self.log(f"    Could not scan transactions: {e}")
                 import traceback
+
                 self.log(f"    Stack trace: {traceback.format_exc()}")
 
             # STEP 4: Try RPC method to get wallet bids (if index-auctions enabled)
@@ -7585,10 +8185,14 @@ to access config and log files!
                             name = bid_entry.get("name")
                             if name and name not in found_names:
                                 found_names.add(name)
-                                self.log(f"      Found name '{name}' from wallet bids RPC")
+                                self.log(
+                                    f"      Found name '{name}' from wallet bids RPC"
+                                )
                         self.log(f"    Found {len(wallet_bids)} bid(s) via RPC")
                     else:
-                        self.log("    No bids found via RPC (this is normal if --index-auctions not enabled)")
+                        self.log(
+                            "    No bids found via RPC (this is normal if --index-auctions not enabled)"
+                        )
                 else:
                     self.log("    RPC getwalletbids not available (this is normal)")
             except Exception as e:
@@ -7605,7 +8209,11 @@ to access config and log files!
                 try:
                     # Skip if already in automation (unless completed/failed/lost)
                     existing_job = self.get_job_by_name(name)
-                    if existing_job and existing_job.get("status") not in ["completed", "failed", "lost"]:
+                    if existing_job and existing_job.get("status") not in [
+                        "completed",
+                        "failed",
+                        "lost",
+                    ]:
                         self.log(f"    Skipping '{name}' - already in automation")
                         continue
 
@@ -7616,7 +8224,7 @@ to access config and log files!
                         continue
 
                     state = full_info.get("state", "UNKNOWN")
-                    
+
                     # Only interested in auction-related states
                     if state not in ["BIDDING", "REVEAL", "CLOSED"]:
                         self.log(f"    Skipping '{name}' - state is {state}")
@@ -7624,7 +8232,7 @@ to access config and log files!
 
                     # Get wallet's bids for this name
                     bids = self.get_wallet_bids_silent(wallet, name)
-                    
+
                     auction_data = {
                         "name": name,
                         "state": state,
@@ -7632,10 +8240,12 @@ to access config and log files!
                         "bids": bids,
                         "name_info": full_info,
                     }
-                    
+
                     auctions.append(auction_data)
-                    self.log(f"    ✓ Found auction: {name} (state: {state}, bids: {len(bids)})")
-                    
+                    self.log(
+                        f"    ✓ Found auction: {name} (state: {state}, bids: {len(bids)})"
+                    )
+
                 except Exception as e:
                     self.log(f"    Error checking name '{name}': {e}")
                     continue
@@ -7663,19 +8273,20 @@ to access config and log files!
                 "Node Not Running",
                 "The FBD node is not running.\n\n"
                 "Would you like to start the node now?",
-                icon="question"
+                icon="question",
             )
             if response:
                 self.start_node()
                 # Wait a moment for node to start
                 self.log("Waiting for node to start...")
                 import time
+
                 time.sleep(3)
                 # Check again
                 if not self.check_node_running():
                     messagebox.showerror(
                         "Node Start Failed",
-                        "Node failed to start. Please start it manually from the Node & Mining tab."
+                        "Node failed to start. Please start it manually from the Node & Mining tab.",
                     )
                     return
             else:
@@ -7695,12 +8306,12 @@ to access config and log files!
                 "• Yes = Check ALL wallets\n"
                 "• No = Enter name manually\n"
                 "• Cancel = View log & close",
-                icon="question"
+                icon="question",
             )
-            
+
             if response is True:  # Yes - check all wallets
                 self.scan_all_wallets_dialog()
-            elif response is False:  # No - manual input  
+            elif response is False:  # No - manual input
                 self.manual_import_name_dialog(wallet)
             else:  # Cancel - show log
                 # Switch to Node & Mining tab to show log
@@ -7727,7 +8338,7 @@ to access config and log files!
             return
 
         self.log("Scanning ALL wallets for auctions...")
-        
+
         # Get list of all wallets
         try:
             cmd, _ = self.get_fbdctl_command("listwallets")
@@ -7740,11 +8351,15 @@ to access config and log files!
             )
 
             if result.returncode != 0:
-                messagebox.showerror("Error", f"Could not list wallets:\n{result.stderr}")
+                messagebox.showerror(
+                    "Error", f"Could not list wallets:\n{result.stderr}"
+                )
                 return
 
             response = json.loads(result.stdout)
-            wallets = response.get("result", []) if isinstance(response, dict) else response
+            wallets = (
+                response.get("result", []) if isinstance(response, dict) else response
+            )
 
             if not wallets:
                 messagebox.showinfo("No Wallets", "No wallets found in this node.")
@@ -7766,7 +8381,7 @@ to access config and log files!
                 messagebox.showinfo(
                     "No Auctions",
                     f"No active auctions found in any of the {len(wallets)} wallet(s).\n\n"
-                    "Check the log for details about each wallet."
+                    "Check the log for details about each wallet.",
                 )
                 self.notebook.select(0)  # Switch to log tab
                 return
@@ -7802,7 +8417,7 @@ to access config and log files!
         instructions = ttk.Label(
             dialog,
             text="Enter the name you want to import.\n"
-                 "The system will check its state and import if possible.",
+            "The system will check its state and import if possible.",
             foreground="#666",
         )
         instructions.pack(pady=(0, 10))
@@ -7811,9 +8426,13 @@ to access config and log files!
         entry_frame = ttk.Frame(dialog)
         entry_frame.pack(pady=10, padx=20, fill="x")
 
-        ttk.Label(entry_frame, text="Name:", font=("Arial", 10)).pack(side="left", padx=(0, 10))
+        ttk.Label(entry_frame, text="Name:", font=("Arial", 10)).pack(
+            side="left", padx=(0, 10)
+        )
         name_var = tk.StringVar()
-        name_entry = ttk.Entry(entry_frame, textvariable=name_var, width=30, font=("Arial", 10))
+        name_entry = ttk.Entry(
+            entry_frame, textvariable=name_var, width=30, font=("Arial", 10)
+        )
         name_entry.pack(side="left", fill="x", expand=True)
         name_entry.focus()
 
@@ -7833,11 +8452,15 @@ to access config and log files!
             try:
                 # Check if already in automation
                 existing_job = self.get_job_by_name(name)
-                if existing_job and existing_job.get("status") not in ["completed", "failed", "lost"]:
+                if existing_job and existing_job.get("status") not in [
+                    "completed",
+                    "failed",
+                    "lost",
+                ]:
                     messagebox.showwarning(
                         "Already in Automation",
                         f"'{name}' is already in the automation list.\n\n"
-                        f"Status: {existing_job.get('status')}"
+                        f"Status: {existing_job.get('status')}",
                     )
                     dialog.destroy()
                     return
@@ -7848,7 +8471,7 @@ to access config and log files!
                     messagebox.showerror(
                         "Name Not Found",
                         f"Could not find name '{name}' on the blockchain.\n\n"
-                        "Please check the spelling and try again."
+                        "Please check the spelling and try again.",
                     )
                     status_label.config(text="", foreground="blue")
                     return
@@ -7859,7 +8482,7 @@ to access config and log files!
                     messagebox.showwarning(
                         "Invalid State",
                         f"Name '{name}' is in state '{state}'.\n\n"
-                        "Only BIDDING, REVEAL, or CLOSED auctions can be imported."
+                        "Only BIDDING, REVEAL, or CLOSED auctions can be imported.",
                     )
                     status_label.config(text="", foreground="blue")
                     return
@@ -7888,17 +8511,22 @@ to access config and log files!
                     f"Action: {recommendation['action']}\n"
                     f"Details: {recommendation['details']}\n\n"
                     "Proceed with import?",
-                    icon="question"
+                    icon="question",
                 )
 
                 if confirm:
                     success = self._execute_import(auction_data, recommendation)
                     if success:
-                        messagebox.showinfo("Success", f"Successfully imported '{name}'!")
+                        messagebox.showinfo(
+                            "Success", f"Successfully imported '{name}'!"
+                        )
                         self.refresh_jobs_list()
                         dialog.destroy()
                     else:
-                        messagebox.showerror("Import Failed", f"Failed to import '{name}'. Check logs for details.")
+                        messagebox.showerror(
+                            "Import Failed",
+                            f"Failed to import '{name}'. Check logs for details.",
+                        )
                         status_label.config(text="", foreground="blue")
                 else:
                     dialog.destroy()
@@ -7912,8 +8540,12 @@ to access config and log files!
         button_frame = ttk.Frame(dialog)
         button_frame.pack(pady=15)
 
-        ttk.Button(button_frame, text="Import", command=import_name).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Import", command=import_name).pack(
+            side="left", padx=5
+        )
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(
+            side="left", padx=5
+        )
 
         # Bind Enter key
         name_entry.bind("<Return>", lambda e: import_name())
@@ -7951,7 +8583,9 @@ to access config and log files!
 
         # TreeView for auctions
         columns = ("Name", "State", "Bids", "Recommendation", "Details")
-        tree = ttk.Treeview(list_frame, columns=columns, show="tree headings", selectmode="extended")
+        tree = ttk.Treeview(
+            list_frame, columns=columns, show="tree headings", selectmode="extended"
+        )
 
         tree.heading("#0", text="Import")
         tree.heading("Name", text="Name")
@@ -7977,7 +8611,7 @@ to access config and log files!
         auction_items = {}
         for auction in auctions:
             recommendation = self._get_import_recommendation(auction)
-            
+
             item_id = tree.insert(
                 "",
                 "end",
@@ -7990,7 +8624,10 @@ to access config and log files!
                     recommendation["details"],
                 ),
             )
-            auction_items[item_id] = {"auction": auction, "recommendation": recommendation}
+            auction_items[item_id] = {
+                "auction": auction,
+                "recommendation": recommendation,
+            }
 
         # Select all by default
         tree.selection_set(tree.get_children())
@@ -8008,12 +8645,14 @@ to access config and log files!
         def import_selected():
             selected = tree.selection()
             if not selected:
-                messagebox.showwarning("No Selection", "Please select at least one auction to import")
+                messagebox.showwarning(
+                    "No Selection", "Please select at least one auction to import"
+                )
                 return
 
             imported_count = 0
             failed_count = 0
-            
+
             for item_id in selected:
                 data = auction_items[item_id]
                 success = self._execute_import(data["auction"], data["recommendation"])
@@ -8026,30 +8665,38 @@ to access config and log files!
             result_msg = f"Import complete!\n\nSuccessfully imported: {imported_count}"
             if failed_count > 0:
                 result_msg += f"\nFailed: {failed_count}"
-            
+
             messagebox.showinfo("Import Complete", result_msg)
-            
+
             # Refresh jobs list
             self.refresh_jobs_list()
-            
+
             dialog.destroy()
 
-        ttk.Button(button_frame, text="Select All", command=select_all).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Deselect All", command=deselect_all).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Import Selected", command=import_selected).pack(side="right", padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Select All", command=select_all).pack(
+            side="left", padx=5
+        )
+        ttk.Button(button_frame, text="Deselect All", command=deselect_all).pack(
+            side="left", padx=5
+        )
+        ttk.Button(button_frame, text="Import Selected", command=import_selected).pack(
+            side="right", padx=5
+        )
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(
+            side="right", padx=5
+        )
 
     def _get_import_recommendation(self, auction):
         """
         Agentic decision-making: determine best action for auction based on state
-        
+
         Returns dict with 'action' and 'details' keys
         """
         name = auction["name"]
         state = auction["state"]
         bids = auction["bids"]
         name_info = auction["name_info"]
-        
+
         # Get current blockchain height
         try:
             current_height = self._get_current_height_silent()
@@ -8061,13 +8708,13 @@ to access config and log files!
                 # Already placed bid, add to automation for reveal
                 return {
                     "action": "Add to automation (REVEAL pending)",
-                    "details": f"Bid already placed. Will auto-reveal when REVEAL phase starts."
+                    "details": f"Bid already placed. Will auto-reveal when REVEAL phase starts.",
                 }
             else:
                 # No bid yet - can't auto-add without bid amount
                 return {
                     "action": "⚠️ Cannot import",
-                    "details": "No bids placed yet. Place bid manually first."
+                    "details": "No bids placed yet. Place bid manually first.",
                 }
 
         elif state == "REVEAL":
@@ -8077,26 +8724,26 @@ to access config and log files!
                 if unrevealed:
                     return {
                         "action": "Execute REVEAL immediately",
-                        "details": f"{len(unrevealed)} bid(s) need revealing. Will reveal now."
+                        "details": f"{len(unrevealed)} bid(s) need revealing. Will reveal now.",
                     }
                 else:
                     # Already revealed, add to automation for register
                     return {
                         "action": "Add to automation (REGISTER pending)",
-                        "details": "Bids revealed. Will auto-register if won."
+                        "details": "Bids revealed. Will auto-register if won.",
                     }
             else:
                 # No bids in REVEAL? Auction lost or error
                 return {
                     "action": "⚠️ Skip",
-                    "details": "No bids found. May have been revealed already or auction lost."
+                    "details": "No bids found. May have been revealed already or auction lost.",
                 }
 
         elif state == "CLOSED":
             # Check if we won or lost
             owner = name_info.get("owner", {})
             can_register = name_info.get("canRegister", False)
-            
+
             if owner:
                 # Already registered by someone - check if it was us
                 # If we have revealed bids, we might need to redeem
@@ -8105,18 +8752,18 @@ to access config and log files!
                     if revealed_bids:
                         return {
                             "action": "Execute REDEEM immediately",
-                            "details": "Auction lost. Will redeem locked funds now."
+                            "details": "Auction lost. Will redeem locked funds now.",
                         }
                 return {
                     "action": "⚠️ Skip",
-                    "details": "Auction closed. Name already registered."
+                    "details": "Auction closed. Name already registered.",
                 }
             else:
                 # Not registered yet - check if we can register
                 if can_register:
                     return {
                         "action": "Execute REGISTER immediately",
-                        "details": "Auction won! Will register name now."
+                        "details": "Auction won! Will register name now.",
                     }
                 elif len(bids) > 0:
                     # We have bids but can't register - we lost
@@ -8124,22 +8771,22 @@ to access config and log files!
                     if revealed_bids:
                         return {
                             "action": "Execute REDEEM immediately",
-                            "details": "Auction lost. Will redeem locked funds now."
+                            "details": "Auction lost. Will redeem locked funds now.",
                         }
                     else:
                         return {
                             "action": "⚠️ Skip",
-                            "details": "Auction closed but bids not revealed. Cannot redeem."
+                            "details": "Auction closed but bids not revealed. Cannot redeem.",
                         }
                 else:
                     return {
                         "action": "⚠️ Skip",
-                        "details": "Auction closed. No action needed."
+                        "details": "Auction closed. No action needed.",
                     }
 
         return {
             "action": "⚠️ Unknown state",
-            "details": f"State '{state}' not recognized."
+            "details": f"State '{state}' not recognized.",
         }
 
     def _execute_import(self, auction, recommendation):
@@ -8156,7 +8803,11 @@ to access config and log files!
         try:
             # Check if already in automation
             existing_job = self.get_job_by_name(name)
-            if existing_job and existing_job.get("status") not in ["completed", "failed", "lost"]:
+            if existing_job and existing_job.get("status") not in [
+                "completed",
+                "failed",
+                "lost",
+            ]:
                 self.log(f"⚠️ Auction '{name}' already in automation, skipping")
                 return False
 
@@ -8182,10 +8833,16 @@ to access config and log files!
                 self.log(f"📝 Executing REGISTER for '{name}'...")
                 result = self.execute_send_register_silent(name, wallet)
                 if result and result.get("success"):
-                    self.log(f"✅ REGISTER executed: {name} (TXID: {result.get('txid', 'N/A')[:12]}...)")
+                    self.log(
+                        f"✅ REGISTER executed: {name} (TXID: {result.get('txid', 'N/A')[:12]}...)"
+                    )
                     return True
                 else:
-                    error = result.get("error", "Unknown error") if result else "No response"
+                    error = (
+                        result.get("error", "Unknown error")
+                        if result
+                        else "No response"
+                    )
                     self.log(f"❌ REGISTER failed for '{name}': {error}")
                     return False
 
@@ -8194,10 +8851,16 @@ to access config and log files!
                 self.log(f"💰 Executing REDEEM for '{name}'...")
                 result = self.execute_send_redeem_silent(name, wallet)
                 if result and result.get("success"):
-                    self.log(f"✅ REDEEM executed: {name} (TXID: {result.get('txid', 'N/A')[:12]}...)")
+                    self.log(
+                        f"✅ REDEEM executed: {name} (TXID: {result.get('txid', 'N/A')[:12]}...)"
+                    )
                     return True
                 else:
-                    error = result.get("error", "Unknown error") if result else "No response"
+                    error = (
+                        result.get("error", "Unknown error")
+                        if result
+                        else "No response"
+                    )
                     self.log(f"❌ REDEEM failed for '{name}': {error}")
                     return False
 
@@ -8228,7 +8891,7 @@ to access config and log files!
         # Get bid amounts from first bid
         bid_amount = 0
         lockup_amount = 0
-        
+
         if bids and len(bids) > 0:
             first_bid = bids[0]
             bid_amount = first_bid.get("value", 0) / 1000000  # Convert from atoms
@@ -8236,9 +8899,9 @@ to access config and log files!
 
         # Create job
         job_id = str(uuid.uuid4())
-        
+
         jobs_data = self.load_auction_jobs()
-        
+
         new_job = {
             "id": job_id,
             "name": name,
@@ -8251,10 +8914,10 @@ to access config and log files!
             "updated_at": datetime.now().isoformat(),
             "imported": True,  # Flag to indicate this was imported
         }
-        
+
         jobs_data["jobs"].append(new_job)
         self.save_auction_jobs(jobs_data)
-        
+
         self.log(f"📥 Imported job: {name} (ID: {job_id[:8]}..., Status: {status})")
 
     # ========================================================================

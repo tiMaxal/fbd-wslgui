@@ -85,6 +85,9 @@ That's it! The launcher will:
    FBD Path: ./fbd-latest-linux-x86_64/fbd
    RPC Host: localhost
    RPC Port: (auto-set by network)
+  Miner URL: https://l.woodburn.au/miner (default)
+  Click "Check Miner Version" to compare local vs latest
+  Click "Check & Auto-Update Miner" to update only if newer/different
    
    Click "Save Settings"
 
@@ -228,6 +231,8 @@ Node Won't Start:
 │    → https://l.woodburn.au/miner                 │
 │    → Place in same folder as fbd_wslgui.py      │
 │    → chmod +x miner (set execute permission)    │
+│    → Optional: Settings -> Check Miner Version   │
+│    → Optional: Check & Auto-Update Miner         │
 │ 2. Node & Mining Tab                            │
 │    • Pool Miner Wallet: your address            │
 │    • Pool Host: pool.woodburn.au               │
@@ -247,6 +252,7 @@ Node Won't Start:
   • Forgetting to disable "Enable Mining" for pool mining
   • Pool miner binary not found = Download & place it
   • Miner not executable = chmod +x miner
+  • Running old miner build = use Settings version check/update buttons
 
 🎯 EXAMPLE WORKFLOWS:
 

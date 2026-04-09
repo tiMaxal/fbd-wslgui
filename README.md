@@ -148,6 +148,11 @@ Mine with others in a mining pool for consistent payouts.
      - ⚠️ **Uncheck "Enable Mining"** (internal mining disabled)
    - Click "Start Pool Miner" button
 
+    - Settings Tab (recommended before first run):
+       - Set **Miner Download URL** (default: `https://l.woodburn.au/miner`)
+       - Click **Check Miner Version** to compare local vs latest
+       - Click **Check & Auto-Update Miner** to install/update only when newer
+
 3. **(Optional) Run Full Node Separately:**
    - Still click "Start Node" if you want a full node running
    - Pool mining continues independently
@@ -215,10 +220,10 @@ Enable Mining: ☐ UNCHECKED (off!)
 - Pool miner won't start → Verify `miner` binary exists: `ls -la miner`
 - No shares detected → Check pool host is correct: `pool.woodburn.au`
 - Mining very slow → Check CPU threads aren't maxed out by other apps
+- Not sure if miner is current → Settings Tab → **Check Miner Version**
+- Want safe update without blind overwrite → Settings Tab → **Check & Auto-Update Miner** (hash-based check)
 
 ---
-
-📋 **TODO:** Future versions will include automatic binary version checking and binary download capability.
 
 ### Documentation
 - **README.md** - This file (feature overview)

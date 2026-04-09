@@ -145,6 +145,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 from pathlib import Path
+import hashlib
 import requests
 from requests.auth import HTTPBasicAuth
 import time
@@ -3057,6 +3058,54 @@ class FBDManager:
 
         advanced_frame.columnconfigure(1, weight=1)
 
+        # Miner binary management
+        miner_frame = ttk.LabelFrame(
+            scrollable_frame, text="⛏️ Miner Binary Management", padding=10
+        )
+        miner_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(miner_frame, text="Miner Download URL:").grid(
+            row=0, column=0, sticky="w", pady=2
+        )
+        self.miner_download_url_var = tk.StringVar(
+            value="https://l.woodburn.au/miner"
+        )
+        ttk.Entry(
+            miner_frame, textvariable=self.miner_download_url_var, width=50
+        ).grid(row=0, column=1, sticky="ew", pady=2)
+
+        button_row = ttk.Frame(miner_frame)
+        button_row.grid(row=0, column=2, padx=5, sticky="n")
+
+        ttk.Button(
+            button_row,
+            text="Check Miner Version",
+            command=self.check_miner_version,
+        ).pack(fill="x", pady=(0, 3))
+
+        ttk.Button(
+            button_row,
+            text="Check & Auto-Update Miner",
+            command=self.download_or_update_miner,
+        ).pack(fill="x")
+
+        self.miner_path_label = ttk.Label(
+            miner_frame,
+            text=f"Target: {self.script_dir / 'miner'}",
+            font=("Arial", 8),
+            foreground="gray",
+        )
+        self.miner_path_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
+        ttk.Label(
+            miner_frame,
+            text="Tip: Check compares local and latest binary by SHA256 before replacing.",
+            font=("Arial", 8),
+            foreground="blue",
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 2))
+
+        miner_frame.columnconfigure(1, weight=1)
+
         # Auto-restart
         restart_frame = ttk.LabelFrame(
             scrollable_frame, text="Auto-Restart", padding=10
@@ -5811,6 +5860,7 @@ class FBDManager:
             "pool_miner_address": "",
             "pool_miner_host": "pool.woodburn.au",
             "pool_miner_threads": "0",
+            "miner_download_url": "https://l.woodburn.au/miner",
             "index_tx": True,
             "index_address": False,
             "index_auctions": False,
@@ -5848,6 +5898,7 @@ class FBDManager:
             "pool_miner_address": self.pool_miner_address_var.get(),
             "pool_miner_host": self.pool_miner_host_var.get(),
             "pool_miner_threads": self.pool_miner_threads_var.get(),
+            "miner_download_url": self.miner_download_url_var.get().strip(),
             "index_tx": self.index_tx_var.get(),
             "index_address": self.index_address_var.get(),
             "index_auctions": self.index_auctions_var.get(),
@@ -5891,6 +5942,9 @@ class FBDManager:
             self.config.get("pool_miner_host", "pool.woodburn.au")
         )
         self.pool_miner_threads_var.set(self.config.get("pool_miner_threads", "0"))
+        self.miner_download_url_var.set(
+            self.config.get("miner_download_url", "https://l.woodburn.au/miner")
+        )
         self.index_tx_var.set(self.config.get("index_tx", True))
         self.index_address_var.set(self.config.get("index_address", False))
         self.index_auctions_var.set(self.config.get("index_auctions", False))
@@ -5952,6 +6006,10 @@ class FBDManager:
                 "mining_enabled": True,
                 "miner_address": "fb1qp979k4ell5hvaktk5e3d6man66jrz2ucvkt748",
                 "miner_threads": default_miner_threads,
+                "pool_miner_address": "",
+                "pool_miner_host": "pool.woodburn.au",
+                "pool_miner_threads": "0",
+                "miner_download_url": "https://l.woodburn.au/miner",
                 "index_tx": True,
                 "index_address": False,
                 "index_auctions": False,
@@ -5965,6 +6023,226 @@ class FBDManager:
             }
             self.load_saved_settings()
             messagebox.showinfo("Success", "Settings reset to defaults")
+
+    def download_or_update_miner(self):
+        """Check latest miner and auto-update only when a newer/different binary exists"""
+        url = self.miner_download_url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a miner download URL.")
+            return
+
+        if not (url.startswith("http://") or url.startswith("https://")):
+            messagebox.showwarning(
+                "Invalid URL",
+                "Miner download URL must start with http:// or https://",
+            )
+            return
+
+        self.log(f"Checking miner version/update source: {url}")
+        threading.Thread(
+            target=self._download_or_update_miner_thread,
+            args=(url,),
+            daemon=True,
+        ).start()
+
+    def check_miner_version(self):
+        """Check whether local miner matches the latest downloadable binary"""
+        url = self.miner_download_url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a miner download URL.")
+            return
+
+        if not (url.startswith("http://") or url.startswith("https://")):
+            messagebox.showwarning(
+                "Invalid URL",
+                "Miner download URL must start with http:// or https://",
+            )
+            return
+
+        self.log(f"Checking miner version against: {url}")
+        threading.Thread(
+            target=self._check_miner_version_thread,
+            args=(url,),
+            daemon=True,
+        ).start()
+
+    def _get_file_sha256(self, path):
+        """Return SHA256 for a file path"""
+        hasher = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def _get_miner_version_string(self, miner_path):
+        """Best-effort version string extraction from miner binary"""
+        try:
+            if sys.platform != "win32":
+                os.chmod(miner_path, 0o755)
+            result = subprocess.run(
+                [str(miner_path), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            output = (result.stdout or result.stderr or "").strip()
+            if output:
+                return output.splitlines()[0][:200]
+        except Exception:
+            pass
+        return "unknown"
+
+    def _check_miner_version_thread(self, url):
+        """Background thread: compare local and latest miner hashes/versions"""
+        miner_path = self.script_dir / "miner"
+        temp_path = self.script_dir / "miner.check"
+
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            if not temp_path.exists() or temp_path.stat().st_size == 0:
+                raise RuntimeError("Downloaded check file is empty.")
+
+            remote_hash = self._get_file_sha256(temp_path)
+            remote_ver = self._get_miner_version_string(temp_path)
+
+            if not miner_path.exists():
+                self.log("Local miner not found. Update required.")
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Miner Version Check",
+                        "Local miner not found.\n\n"
+                        f"Latest version: {remote_ver}\n"
+                        f"SHA256: {remote_hash[:16]}...\n\n"
+                        "Use 'Check & Auto-Update Miner' to install.",
+                    ),
+                )
+                return
+
+            local_hash = self._get_file_sha256(miner_path)
+            local_ver = self._get_miner_version_string(miner_path)
+
+            if local_hash == remote_hash:
+                self.log("Miner version check: already up to date.")
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Miner Version Check",
+                        "Miner is already up to date.\n\n"
+                        f"Local version: {local_ver}\n"
+                        f"Latest version: {remote_ver}\n"
+                        f"SHA256: {local_hash[:16]}...",
+                    ),
+                )
+            else:
+                self.log("Miner version check: update available.")
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Miner Version Check",
+                        "Update available for miner.\n\n"
+                        f"Local version: {local_ver}\n"
+                        f"Latest version: {remote_ver}\n\n"
+                        "Use 'Check & Auto-Update Miner' to apply.",
+                    ),
+                )
+        except Exception as e:
+            self.log(f"Miner version check failed: {e}", level="error")
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Version Check Failed",
+                    f"Failed to check miner version:\n{e}",
+                ),
+            )
+        finally:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
+
+    def _download_or_update_miner_thread(self, url):
+        """Background thread: download latest miner and replace only when hash differs"""
+        miner_path = self.script_dir / "miner"
+        temp_path = self.script_dir / "miner.download"
+        backup_path = self.script_dir / (
+            f"miner.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            if not temp_path.exists() or temp_path.stat().st_size == 0:
+                raise RuntimeError("Downloaded miner file is empty.")
+
+            remote_hash = self._get_file_sha256(temp_path)
+            remote_ver = self._get_miner_version_string(temp_path)
+
+            if miner_path.exists():
+                local_hash = self._get_file_sha256(miner_path)
+                local_ver = self._get_miner_version_string(miner_path)
+                if local_hash == remote_hash:
+                    self.log("Miner already up to date (hash match).")
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            "Miner Up To Date",
+                            "No update needed. Local miner matches latest.\n\n"
+                            f"Version: {local_ver}\n"
+                            f"SHA256: {local_hash[:16]}...",
+                        ),
+                    )
+                    return
+
+            if miner_path.exists():
+                miner_path.replace(backup_path)
+                self.log(f"Backed up existing miner to: {backup_path.name}")
+
+            temp_path.replace(miner_path)
+
+            if sys.platform != "win32":
+                os.chmod(miner_path, 0o755)
+
+            new_ver = self._get_miner_version_string(miner_path)
+            self.log(f"Miner updated successfully: {miner_path}")
+            self.root.after(
+                0,
+                lambda: messagebox.showinfo(
+                    "Miner Updated",
+                    "Miner downloaded/updated successfully.\n\n"
+                    f"Version: {new_ver}\n"
+                    f"SHA256: {remote_hash[:16]}...\n"
+                    f"Path: {miner_path}",
+                ),
+            )
+        except Exception as e:
+            self.log(f"Miner update failed: {e}", level="error")
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Miner Update Failed", f"Failed to download/update miner:\n{e}"
+                ),
+            )
+        finally:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
 
     def check_running_instances(self):
         """Check for running fbd instances"""
@@ -6160,6 +6438,10 @@ class FBDManager:
                 "mining_enabled": self.mining_enabled.get(),
                 "miner_address": self.miner_address_var.get(),
                 "miner_threads": self.miner_threads_var.get(),
+                "pool_miner_address": self.pool_miner_address_var.get(),
+                "pool_miner_host": self.pool_miner_host_var.get(),
+                "pool_miner_threads": self.pool_miner_threads_var.get(),
+                "miner_download_url": self.miner_download_url_var.get().strip(),
                 "index_tx": self.index_tx_var.get(),
                 "index_address": self.index_address_var.get(),
                 "index_auctions": self.index_auctions_var.get(),
@@ -6219,6 +6501,10 @@ class FBDManager:
                 "mining_enabled": self.mining_enabled.get(),
                 "miner_address": self.miner_address_var.get(),
                 "miner_threads": self.miner_threads_var.get(),
+                "pool_miner_address": self.pool_miner_address_var.get(),
+                "pool_miner_host": self.pool_miner_host_var.get(),
+                "pool_miner_threads": self.pool_miner_threads_var.get(),
+                "miner_download_url": self.miner_download_url_var.get().strip(),
                 "index_tx": self.index_tx_var.get(),
                 "index_address": self.index_address_var.get(),
                 "index_auctions": self.index_auctions_var.get(),
@@ -6715,6 +7001,8 @@ FBD Node Manager v3.1.0 - Quick Help
   • Set pool wallet address & host
   • Click "Start Pool Miner" button
   • Consistent payouts, no full node needed
+    • Settings -> Check Miner Version (compare local vs latest)
+    • Settings -> Check & Auto-Update Miner (updates only when needed)
   → For casual miners
 
   ⚠️ Cannot run BOTH simultaneously!
@@ -6733,6 +7021,7 @@ FBD Node Manager v3.1.0 - Quick Help
 • Save/load configurations
 • Export/import for backup
 • Configure auto-restart & indexing
+• Manage miner URL and safe version-checked auto-update
 
 📂 FILES LOCATION:
 • Config: ~/.fbdgui/fbdgui_config.json
