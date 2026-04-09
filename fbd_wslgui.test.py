@@ -4300,7 +4300,7 @@ class FBDManager:
 
             try:
                 cmd, fbdctl_path = self.get_fbdctl_command(
-                    "importwallet", wallet_name, seed_phrase
+                    "createwallet", wallet_name, seed_phrase
                 )
                 result = subprocess.run(
                     cmd,
@@ -4310,21 +4310,48 @@ class FBDManager:
                 )
 
                 if result.returncode == 0:
-                    self.log(f"Wallet imported: {wallet_name}")
+                    self.log(f"Wallet imported from mnemonic: {wallet_name}")
                     messagebox.showinfo(
-                        "Success", f"Wallet '{wallet_name}' imported successfully!"
+                        "Success",
+                        f"Wallet '{wallet_name}' restored from mnemonic successfully!",
                     )
                     self.wallet_name_var.set(wallet_name)
                     dialog.destroy()
                 else:
-                    error_msg = result.stderr
-                    self.log(f"Error importing wallet: {error_msg}")
+                    stderr_msg = (result.stderr or "").strip()
+                    stdout_msg = (result.stdout or "").strip()
+                    error_msg = (
+                        stderr_msg
+                        or stdout_msg
+                        or "No error details returned by fbdctl."
+                    )
+
+                    # Avoid logging sensitive seed phrase; only log wallet and tool output.
+                    self.log(
+                        "Error importing wallet "
+                        f"'{wallet_name}' (exit code {result.returncode}). "
+                        f"stderr: {stderr_msg or '<empty>'}; stdout: {stdout_msg or '<empty>'}",
+                        level="error",
+                    )
                     messagebox.showerror(
-                        "Error", f"Failed to import wallet:\\n{error_msg}"
+                        "Wallet Import Failed",
+                        "Failed to import wallet.\n\n"
+                        f"Wallet: {wallet_name}\n"
+                        f"Exit code: {result.returncode}\n\n"
+                        f"Details:\n{error_msg}",
                     )
             except Exception as e:
-                self.log(f"Exception importing wallet: {e}")
-                messagebox.showerror("Error", f"Failed to import wallet: {e}")
+                self.log(
+                    f"Exception importing wallet '{wallet_name}': {type(e).__name__}: {e}",
+                    level="error",
+                )
+                messagebox.showerror(
+                    "Wallet Import Failed",
+                    "Failed to import wallet due to an unexpected error.\n\n"
+                    f"Wallet: {wallet_name}\n"
+                    f"Error type: {type(e).__name__}\n"
+                    f"Details: {e}",
+                )
 
         ttk.Button(dialog, text="Import", command=do_import).pack(pady=10)
         ttk.Button(dialog, text="Cancel", command=dialog.destroy).pack(pady=5)

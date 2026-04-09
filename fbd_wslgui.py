@@ -4301,7 +4301,7 @@ class FBDManager:
 
             try:
                 cmd, fbdctl_path = self.get_fbdctl_command(
-                    "importwallet", wallet_name, seed_phrase
+                    "createwallet", wallet_name, seed_phrase
                 )
                 result = subprocess.run(
                     cmd,
@@ -4311,9 +4311,10 @@ class FBDManager:
                 )
 
                 if result.returncode == 0:
-                    self.log(f"Wallet imported: {wallet_name}")
+                    self.log(f"Wallet imported from mnemonic: {wallet_name}")
                     messagebox.showinfo(
-                        "Success", f"Wallet '{wallet_name}' imported successfully!"
+                        "Success",
+                        f"Wallet '{wallet_name}' restored from mnemonic successfully!",
                     )
                     self.wallet_name_var.set(wallet_name)
                     dialog.destroy()
