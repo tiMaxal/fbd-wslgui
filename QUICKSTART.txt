@@ -86,10 +86,17 @@ That's it! The launcher will:
    RPC Host: localhost
    RPC Port: (auto-set by network)
   Miner URL: https://l.woodburn.au/miner (default)
+  FBD Package URL: https://fbd.dev/download/fbd-latest-linux-x86_64.zip
   Click "Check Miner Version" to compare local vs latest
   Click "Check & Auto-Update Miner" to update only if newer/different
+  Click "Check FBD Version" to compare configured fbd vs latest package
+  Click "Check & Auto-Update FBD" to update fbd + fbdctl if newer
    
    Click "Save Settings"
+
+  Startup Behavior:
+  • On launch, app checks miner and fbd/fbdctl versions automatically
+  • If updates available: choose "Yes" (update now) or "No" (do later)
 
 2. NODE & MINING TAB - Choose Your Mining Mode
    ──────────────────────────────────────────────
@@ -253,6 +260,7 @@ Node Won't Start:
   • Pool miner binary not found = Download & place it
   • Miner not executable = chmod +x miner
   • Running old miner build = use Settings version check/update buttons
+  • Running old fbd/fbdctl build = use Settings FBD version check/update buttons
 
 🎯 EXAMPLE WORKFLOWS:
 
