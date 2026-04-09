@@ -96,8 +96,129 @@ Runs the test version (fbd_wslgui.test.py) separately.
 2. Make it executable: `chmod +x miner`
 3. Place it in the same directory as `fbd_wslgui.py`
 
+More details in the **Pool Mining** section below.
 
-📋 **TODO:** Future versions will include automatic binary version checking and download capability.
+---
+
+## ⛏️ Mining Options
+
+The FBD Node Manager supports **two distinct mining modes**:
+
+### Solo Mining (100% Rewards)
+
+Mine blocks independently and keep all rewards.
+
+**Setup:**
+- Settings Tab → Set FBD path and RPC settings
+- Node & Mining Tab:
+  - Enter your FBC wallet address in "Miner Address"
+  - Set CPU threads (0 = auto, recommended: cores - 1)
+  - ✅ **Check "Enable Mining"**
+  - Leave Pool Miner fields empty
+- Click "Start Node"
+
+**Pros:** 100% of block rewards
+**Cons:** Need full node running, higher variance, requires more computation
+
+**Example:**
+```
+Miner Address: fb1qzg8epa5f8s2sxu8xz7vq9yqx8c9d7e6f5g4h3g
+Miner Threads: 12
+Enable Mining: ✓ CHECKED
+Pool Miner: (empty)
+```
+
+---
+
+### Pool Mining (Shared Rewards - Recommended)
+
+Mine with others in a mining pool for consistent payouts.
+
+**Setup:**
+1. **Ensure `miner` binary is present:**
+   - Download: https://l.woodburn.au/miner
+   - Place in same directory as `fbd_wslgui.py`
+   - Set execute permission: `chmod +x miner`
+
+2. **Configure Pool Miner:**
+   - Node & Mining Tab:
+     - Enter your FBC wallet address in "Pool Miner Wallet Address"
+     - Pool Host: `pool.woodburn.au` (default)
+     - Pool Threads: 0 (auto-detect, recommended)
+     - ⚠️ **Uncheck "Enable Mining"** (internal mining disabled)
+   - Click "Start Pool Miner" button
+
+3. **(Optional) Run Full Node Separately:**
+   - Still click "Start Node" if you want a full node running
+   - Pool mining continues independently
+   - Pool mining does NOT require the node
+
+**Pros:**
+- Consistent payouts (lower variance)
+- No full node required
+- Lower power requirements  
+- Mining continues even if node lags
+- More suitable for casual miners
+
+**Cons:**
+- Pool operator takes a fee from rewards
+- Shared block rewards
+
+**Example:**
+```
+Pool Miner Wallet: fb1qzg8epa5f8s2sxu8xz7vq9yqx8c9d7e6f5g4h3g
+Pool Host: pool.woodburn.au
+Pool Threads: 0 (auto)
+Enable Mining: ☐ UNCHECKED (off!)
+```
+
+**Pool Username:** When mining, you'll be identified as: `<your-wallet-address>.wslgui`
+
+---
+
+### Switching Between Mining Modes
+
+⚠️ **You CANNOT run both mining modes simultaneously.**
+
+**To switch from Solo → Pool Mining:**
+1. Click "Stop Node" (if node is running)
+2. Uncheck "Enable Mining"
+3. Fill in Pool Miner settings
+4. Click "Start Pool Miner"
+
+**To switch from Pool Mining → Solo:**
+1. Click "Stop Pool Miner"
+2. Fill in Solo Miner settings
+3. Check "Enable Mining"
+4. Click "Start Node"
+
+---
+
+### Mining Performance Tips
+
+**Thread Count:**
+- `0` = Auto-detect (recommended, uses all available cores)
+- Manual: Set to `(CPU cores - 1)` to leave 1 core for system tasks
+- Example: 12-core CPU → set to 11 threads
+
+**Network Stability:**
+- Mine on `main` network (not testnet) for real rewards
+- Ensure stable internet connection
+- Monitor log output for peer connections
+
+**24/7 Mining:**
+- Leave the GUI running continuously
+- Monitor via logs: `~/.fbdgui/fbdgui.log`
+- Use profiles (Settings → Save/Load) to quickly restore last config
+
+**Troubleshooting:**
+- Pool miner won't start → Verify `miner` binary exists: `ls -la miner`
+- No shares detected → Check pool host is correct: `pool.woodburn.au`
+- Mining very slow → Check CPU threads aren't maxed out by other apps
+
+---
+
+📋 **TODO:** Future versions will include automatic binary version checking and binary download capability.
 
 ### Documentation
 - **README.md** - This file (feature overview)

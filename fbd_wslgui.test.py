@@ -2,7 +2,7 @@
 """
 FBD Node Manager GUI
 A graphical interface for managing FBD node, mining, wallet, and auctions.
-Works in WSL with X11 forwarding enabled.
+Linux-native Python app (runs on native Linux, WSL, or Windows via WSL).
 
 Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026
 """
@@ -6688,36 +6688,69 @@ class FBDManager:
     def show_help(self):
         """Display help dialog with quick reference"""
         help_text = """
-FBD Node Manager - Quick Help
+FBD Node Manager v3.1.0 - Quick Help
 
-📖 DOCUMENTATION FILES:
-• README.md - Complete package documentation
-• GUI_README.md - Detailed feature guide  
-• QUICKSTART.txt - Visual quick start guide
-• PROFILES_GUIDE.md - Configuration profiles guide
+🐧 PLATFORM:
+• Linux-native Python app (runs on native Linux, WSL, or Windows via WSL)
+• "wslgui" name reflects original WSL development environment
+• Core app is standard cross-platform Python/Tkinter
+
+📦 DEPENDENCIES:
+• Python 3.6+ with tkinter (python3-tk)
+• python3-requests library
+• Auto-checked on startup with install offers
+
+⚠️  REQUIRED BINARIES:
+• fbd & fbdctl NOT included in repo (file size)
+• Download: https://fbd.dev/download/fbd-latest-linux-x86_64.zip
+• Extract and place in same directory as this app
+• chmod +x fbd fbdctl
+• Keep updated by re-downloading latest zip
+
+📖 DOCUMENTATION:
+• README.md - Complete usage guide
+• QUICKSTART.txt - Quick start reference
+• ai-hist_fbd-wslgui/ - Archived docs & older versions
 
 🚀 GETTING STARTED:
-1. Settings Tab → Set FBD path
-2. Node & Mining Tab → Configure network & miner address
-3. Click "Start Node"
+1. Download fbd & fbdctl binaries (see above)
+2. Settings Tab → Set FBD path (e.g., ./fbd or ./fbd-latest-linux-x86_64/fbd)
+3. Node & Mining Tab → Configure network & miner address
+4. Click "Start Node"
 
-⛏️ MINING:
-• Check "Enable Mining" to mine blocks
-• Uncheck to run node-only (no mining)
-• Set threads: 0 = auto, max = cores - 1
+⛏️ MINING (Two Modes - Choose One):
+
+    SOLO MINING:
+    • Enable Mining checkbox: ✓ CHECKED
+    • Set miner address & threads
+    • Click "Start Node"
+    • Keep 100% of block rewards
+    → For dedicated miners
+
+    POOL MINING (Recommended):
+    • Enable Mining checkbox: ☐ UNCHECKED
+    • Set pool wallet address & host
+    • Click "Start Pool Miner" button
+    • Consistent payouts, no full node needed
+    → For casual miners
+
+    ⚠️ Cannot run BOTH simultaneously!
+
 
 💰 WALLET:
 • List/Create wallets in Wallet tab
-• Get balance, send payments
-• View transaction history
+• Get balance, send payments, view transactions
+• Remember to save your wallet mnemonic!
 
 🏆 AUCTIONS:
 • Get name info → Open → Bid → Reveal → Register
 • View owned names with "Load My Names"
+• Automation available in Auction Automation tab
 
-⚙️ PROFILES:
-• Settings Tab → save/load different configurations
-• Create profiles for different use cases
+⚙️ SETTINGS:
+• Save/load configurations
+• Export/import for backup
+• Configure auto-restart & indexing
 
 📂 FILES LOCATION:
 • Config: ~/.fbdgui/fbdgui_config.json
@@ -6727,9 +6760,10 @@ FBD Node Manager - Quick Help
 🔗 RESOURCES:
 • FBD Docs: https://fbd.dev
 • Explorer: https://explorer.fistbump.org/
+• Whitepaper: https://fistbump.org/fistbump.txt
 
-💡 TIP: Click "File" menu → "Open GUI Config Directory"
-to access all documentation files!
+💡 TIP: Use File → Open GUI Config Directory
+to access config and log files!
 """
 
         # Create custom dialog
@@ -6756,11 +6790,6 @@ to access all documentation files!
             button_frame,
             text="Open README.md",
             command=lambda: self.open_doc_file("README.md"),
-        ).pack(side="left", padx=5)
-        ttk.Button(
-            button_frame,
-            text="Open GUI_README.md",
-            command=lambda: self.open_doc_file("GUI_README.md"),
         ).pack(side="left", padx=5)
         ttk.Button(
             button_frame,

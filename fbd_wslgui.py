@@ -6701,10 +6701,23 @@ FBD Node Manager v3.1.0 - Quick Help
 3. Node & Mining Tab → Configure network & miner address
 4. Click "Start Node"
 
-⛏️ MINING:
-• Check "Enable Mining" to mine blocks
-• Uncheck to run node-only (no mining)
-• Set threads: 0 = auto, max = cores - 1
+⛏️ MINING (Two Modes - Choose One):
+
+  SOLO MINING:
+  • Enable Mining checkbox: ✓ CHECKED
+  • Set miner address & threads
+  • Click "Start Node"
+  • Keep 100% of block rewards
+  → For dedicated miners
+
+  POOL MINING (Recommended):
+  • Enable Mining checkbox: ☐ UNCHECKED
+  • Set pool wallet address & host
+  • Click "Start Pool Miner" button
+  • Consistent payouts, no full node needed
+  → For casual miners
+
+  ⚠️ Cannot run BOTH simultaneously!
 
 💰 WALLET:
 • List/Create wallets in Wallet tab

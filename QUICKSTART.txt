@@ -88,15 +88,36 @@ That's it! The launcher will:
    
    Click "Save Settings"
 
-2. NODE & MINING TAB
-   ─────────────────
+2. NODE & MINING TAB - Choose Your Mining Mode
+   ──────────────────────────────────────────────
    Network: main (or testnet for testing)
-   Miner Address: your FBC wallet address
-   Miner Threads: 12 (or 0 for auto)
-  Pool Miner: wallet address + host (default pool.woodburn.au)
-   Enable Mining: ✓ (or uncheck for node-only)
-   
-   Click "Start Node"
+
+   MODE A: SOLO MINING (Default)
+   ────────────────────────────
+   • Miner Address: your FBC wallet address
+   • Miner Threads: 12 (or 0 for auto, or 1 less than CPU cores)
+   • Enable Mining: ✓ (checked)
+   • Leave Pool Miner fields empty
+   • Click "Start Node"
+   → You keep 100% of block rewards
+   → Requires more computational power
+   → Best for dedicated mining operations
+
+   MODE B: POOL MINING (Recommended for Most Users)
+   ─────────────────────────────────────────────────
+   • Pool Miner Wallet Address: your FBC wallet address
+   • Pool Host: pool.woodburn.au (default)
+   • Pool Threads: 0 (auto, recommended)
+   • Enable Mining: UNCHECK (unchecked - don't enable internal mining)
+   • Do NOT use Start Node button
+   • Click "Start Pool Miner" button
+   → Share rewards with pool (fee-based split)
+   → Lower variance, more consistent payouts
+   → Best for the majority of miners
+   → Mining continues even if node lags
+   → Wallet naming: You'll mine as "youraddress.wslgui"
+
+   ⚠️  IMPORTANT: Cannot run BOTH modes simultaneously!
 
 3. MONITOR
    ───────
@@ -186,6 +207,47 @@ Node Won't Start:
 
 ───────────────────────────────────────────────────────────────
 
+⛏️ MINING QUICK REFERENCE:
+
+┌─ SOLO MINING (100% Rewards) ─────────────────────┐
+│                                                   │
+│ 1. Node & Mining Tab                            │
+│    • Miner Address: your address                │
+│    • Enable Mining: ✓ CHECKED                   │
+│    • Threads: 12 (or 0 for auto)               │
+│ 2. Click "Start Node"                           │
+│ 3. Keep mining running 24/7 for best results   │
+│ → Need full node running (uses more data)      │
+│ → Higher rewards but needs dedicated setup     │
+│                                                  │
+└────────────────────────────────────────────────┘
+
+┌─ POOL MINING (Shared Rewards) ────────────────────┐
+│                                                    │
+│ 1. Download miner binary (if not present)        │
+│    → https://l.woodburn.au/miner                 │
+│    → Place in same folder as fbd_wslgui.py      │
+│    → chmod +x miner (set execute permission)    │
+│ 2. Node & Mining Tab                            │
+│    • Pool Miner Wallet: your address            │
+│    • Pool Host: pool.woodburn.au               │
+│    • Pool Threads: 0 (auto)                    │
+│    • Enable Mining: ✓ UNCHECKED (off!)         │
+│ 3. Click "Start Pool Miner" button              │
+│ 4. Node & Mining continues separately          │
+│ → No full node required                        │
+│ → Consistent payouts                           │
+│ → Lower power requirements                     │
+│ → Mining name: youraddress.wslgui              │
+│                                                  │
+└────────────────────────────────────────────────┘
+
+⚠️  COMMON MISTAKES:
+  • Trying to run BOTH mining modes = ERROR
+  • Forgetting to disable "Enable Mining" for pool mining
+  • Pool miner binary not found = Download & place it
+  • Miner not executable = chmod +x miner
+
 🎯 EXAMPLE WORKFLOWS:
 
 SOLO MINING:
@@ -193,7 +255,14 @@ SOLO MINING:
   2. Settings → Set miner address
   3. Node & Mining → Enable Mining ✓
   4. Set threads (12) → Start Node
-  5. Monitor log for "Mined block..."
+  5. Monitor log for "Mined block"
+
+POOL MINING:
+  1. Double-click fbd-wslgui_launch.bat
+  2. Node & Mining → Set pool wallet address
+  3. Click "Start Pool Miner"
+  4. Separately, Start Node (optional)
+  5. Monitor log for pool mining activity
 
 NAME REGISTRATION:
   1. Launch GUI
