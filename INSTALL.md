@@ -16,22 +16,22 @@ The app requires only **2 external packages**:
 #### Ubuntu / Debian / Mint / Xubuntu:
 ```bash
 sudo apt update
-sudo apt install -y python3-tk python3-requests
+sudo apt install -y python3-tk python3-requests libsqlite3-dev
 ```
 
 #### Fedora / RHEL / CentOS:
 ```bash
-sudo dnf install -y python3-tkinter python3-requests
+sudo dnf install -y python3-tkinter python3-requests libsqlite3-dev
 ```
 
 #### Arch Linux / Manjaro:
 ```bash
-sudo pacman -S tk python-requests
+sudo pacman -S tk python-requests sqlite3
 ```
 
 #### OpenSUSE:
 ```bash
-sudo zypper install python3-tk python3-requests
+sudo zypper install python3-tk python3-requests sqlite3-devel
 ```
 
 ### Step 2: Download FBD Binaries
@@ -55,7 +55,20 @@ sudo zypper install python3-tk python3-requests
 
 4. Place them in the same directory as `fbd_wslgui.py` or update the FBD path in Settings
 
-### Step 3: Run the Application
+### Step 3: Download pool miner
+
+⚠ **IMPORTANT:** The `pool` binary is **NOT included** in this repository.
+
+1. Download the Linux binary and make it executable:
+   ```bash
+   wget https://l.woodburn.au/miner
+   chmod +x miner
+   ```
+
+2. Place the binary in the same directory as fbd_wslgui.py
+
+
+### Step 4: Run the Application
 
 ```bash
 python3 fbd_wslgui.py
@@ -94,6 +107,10 @@ sudo apt install -y python3 python3-tk python3-requests
 wget https://fbd.dev/download/fbd-latest-linux-x86_64.zip
 unzip fbd-latest-linux-x86_64.zip
 chmod +x fbd fbdctl
+
+# Download pool
+wget https://l.woodburn.au/miner
+chmod +x miner
 ```
 
 ### Step 3: Launch Options

@@ -15,9 +15,10 @@ A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, w
 
 ## 📦 Dependencies
 
-**Only 2 packages needed:**
+**Only 3 packages needed:**
 - `python3-tk` - GUI framework (tkinter)
 - `python3-requests` - HTTP library for RPC calls
+- `libsqlite3-dev` - SQLite database support (for local data storage)
 
 **All other imports are Python standard library** (json, os, datetime, email, pathlib, base64, etc.)
 
@@ -28,13 +29,13 @@ A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, w
 **Quick install:**
 ```bash
 # Ubuntu/Debian/Xubuntu
-sudo apt update && sudo apt install -y python3-tk python3-requests
+sudo apt update && sudo apt install -y python3-tk python3-requests libsqlite3-dev
 
 # Fedora/RHEL/CentOS
-sudo dnf install -y python3-tkinter python3-requests
+sudo dnf install -y python3-tkinter python3-requests libsqlite3-devel
 
 # Arch Linux
-sudo pacman -S tk python-requests
+sudo pacman -S tk python-requests sqlite3
 ```
 
 **Minimum Python version:** 3.6+
@@ -77,14 +78,24 @@ Runs the test version (fbd_wslgui.test.py) separately.
 - **fbdwslgui-test_launch.bat** - Test version launcher
 
 ### Binaries
-⚠️ **IMPORTANT:** The `fbd` and `fbdctl` binaries are NOT included in this repository due to file size.
+#### FBD
 
+⚠️ **IMPORTANT:** The `fbd` and `fbdctl` binaries are NOT included in this repository due to file size.
 **You must download them separately:**
 1. Download the latest Linux binaries: https://fbd.dev/download/fbd-latest-linux-x86_64.zip
 2. Extract the zip file: `unzip fbd-latest-linux-x86_64.zip`
 3. Place both `fbd` and `fbdctl` in the same directory as `fbd_wslgui.py`
 4. Ensure they have execute permissions: `chmod +x fbd fbdctl`
 5. Keep them updated by downloading the latest zip regularly
+
+#### Pool miner
+
+⚠️ **IMPORTANT:** The `miner` binary is NOT included in this repository due to file size.
+**You must download it separately:**
+1. Download the Linux binary: https://l.woodburn.au/miner
+2. Make it executable: `chmod +x miner`
+3. Place it in the same directory as `fbd_wslgui.py`
+
 
 📋 **TODO:** Future versions will include automatic binary version checking and download capability.
 
@@ -109,6 +120,7 @@ Runs the test version (fbd_wslgui.test.py) separately.
 - Toggle mining on/off independently of node
 - Set miner address for coinbase rewards
 - Configure thread count (0 = auto)
+- Launch a pool miner with wallet address, host, and thread count
 - Agent name customization
 - Node-only mode available (sync without mining)
 

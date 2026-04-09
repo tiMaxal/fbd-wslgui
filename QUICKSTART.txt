@@ -93,6 +93,7 @@ That's it! The launcher will:
    Network: main (or testnet for testing)
    Miner Address: your FBC wallet address
    Miner Threads: 12 (or 0 for auto)
+  Pool Miner: wallet address + host (default pool.woodburn.au)
    Enable Mining: ✓ (or uncheck for node-only)
    
    Click "Start Node"
@@ -246,6 +247,7 @@ NODE & MINING TAB
 ✓ Start/stop FBD node
 ✓ Enable/disable mining
 ✓ Configure miner address & threads
+✓ Start pool mining with custom host
 ✓ Choose network (main/testnet/regtest/simnet)
 ✓ Index options (tx, address, auctions)
 ✓ Real-time status (blocks, peers)
