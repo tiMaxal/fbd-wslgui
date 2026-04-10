@@ -14,6 +14,7 @@ Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026
 import os
 import sys
 import subprocess
+import signal
 
 
 def check_and_install_dependencies():
@@ -135,6 +136,37 @@ def check_and_install_dependencies():
 
 # Run dependency check before imports
 check_and_install_dependencies()
+
+
+def format_process_exit_code(exit_code):
+  """Format process exit code and include signal name for signal-terminated processes."""
+  if exit_code is None:
+    return "unknown"
+
+  if exit_code < 0:
+    signal_number = -exit_code
+    try:
+      signal_name = signal.Signals(signal_number).name
+    except ValueError:
+      signal_name = f"SIG{signal_number}"
+    return f"{exit_code} (signal {signal_name})"
+
+  return str(exit_code)
+
+
+def get_process_exit_hint(exit_code):
+  """Return a short diagnostic hint for notable process exit codes."""
+  if exit_code is None or exit_code >= 0:
+    return None
+
+  signal_number = -exit_code
+  if signal_number == signal.SIGILL:
+    return (
+      "Likely cause: unsupported CPU instruction set in this miner build "
+      "or a corrupted binary."
+    )
+
+  return None
 
 # ============================================================================
 # IMPORTS - Only reached if dependencies are satisfied
@@ -1226,6 +1258,9 @@ class FBDManager:
     self.calc_refresh_in_progress = False
     self.calc_refresh_retry_count = 0
     self.calc_refresh_max_retries = 6 # 6 retries x 5 seconds = 30 seconds max wait
+    self.rollout_reminders = []
+    self.watchlist = []
+    self._watchlist_check_tick = 0
 
     # Create UI
     self.create_notebook()
@@ -1869,7 +1904,13 @@ class FBDManager:
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
     )
 
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas_window = canvas.create_window(
+      (0, 0), window=scrollable_frame, anchor="nw"
+    )
+    canvas.bind(
+      "<Configure>",
+      lambda e: canvas.itemconfigure(canvas_window, width=e.width),
+    )
     canvas.configure(yscrollcommand=scrollbar.set)
 
     # Pack canvas and scrollbar
@@ -2034,10 +2075,20 @@ class FBDManager:
     ttk.Button(name_frame, text="Get Name Info", command=self.get_name_info).grid(
       row=0, column=2, padx=5
     )
+    ttk.Button(
+      name_frame,
+      text="Rollout Reminders",
+      command=self.show_rollout_reminders_manager,
+    ).grid(row=0, column=3, padx=5)
+    ttk.Button(
+      name_frame,
+      text="Watchlist",
+      command=self.show_watchlist_manager,
+    ).grid(row=0, column=4, padx=5)
 
     # Auction actions
     action_frame = ttk.Frame(name_frame)
-    action_frame.grid(row=1, column=0, columnspan=3, pady=10)
+    action_frame.grid(row=1, column=0, columnspan=5, pady=10)
 
     ttk.Button(action_frame, text="Open Auction", command=self.send_open).pack(
       side="left", padx=2
@@ -3080,12 +3131,17 @@ class FBDManager:
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
     scrollable_frame = ttk.Frame(canvas)
 
-    # Configure canvas scrolling
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
     )
 
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas_window = canvas.create_window(
+      (0, 0), window=scrollable_frame, anchor="nw"
+    )
+    canvas.bind(
+      "<Configure>",
+      lambda e: canvas.itemconfigure(canvas_window, width=e.width),
+    )
     canvas.configure(yscrollcommand=scrollbar.set)
 
     # Pack canvas and scrollbar
@@ -3776,7 +3832,12 @@ class FBDManager:
         return
 
       if exit_code != 0:
-        self.log(f"[!] Pool miner exited with exit code: {exit_code}")
+        self.log(
+          f"[!] Pool miner exited with exit code: {format_process_exit_code(exit_code)}"
+        )
+        hint = get_process_exit_hint(exit_code)
+        if hint:
+          self.log(f"[HINT] {hint}")
       else:
         self.log("Pool miner exited cleanly (exit code 0)")
 
@@ -3829,7 +3890,12 @@ class FBDManager:
 
       # Detect crash
       if exit_code != 0:
-        self.log(f"[!] Node crashed with exit code: {exit_code}")
+        self.log(
+          f"[!] Node crashed with exit code: {format_process_exit_code(exit_code)}"
+        )
+        hint = get_process_exit_hint(exit_code)
+        if hint:
+          self.log(f"[HINT] {hint}")
       else:
         self.log("Node exited cleanly (exit code 0)")
 
@@ -4268,6 +4334,8 @@ class FBDManager:
     """Periodically check node status"""
     if self.monitoring:
       self.refresh_status()
+      self.check_rollout_reminders()
+      self.check_watchlist_auction_start()
       self.root.after(5000, self.monitor_status) # Every 5 seconds
 
   def refresh_status(self):
@@ -6152,16 +6220,29 @@ class FBDManager:
           if isinstance(min_bid_raw, (int, float))
           else 0
         )
+        if abs(min_bid_fbc - round(min_bid_fbc)) < 1e-9:
+          min_bid_display = f"{int(round(min_bid_fbc)):,}"
+        else:
+          min_bid_display = f"{min_bid_fbc:,.6f}".rstrip("0").rstrip(".")
+        min_bid_raw_display = (
+          f"{int(min_bid_raw):,}"
+          if isinstance(min_bid_raw, (int, float))
+          else str(min_bid_raw)
+        )
 
         # Also show in popup for better visibility
         messagebox.showinfo(
           f"Name Info: {name}",
           f"Details shown in 'Name/Auction Details' section below.\n\n"
-          f"Minimum Bid (raw): {min_bid_raw:,}\n"
-          f"Minimum Bid (FBC): {min_bid_fbc:.6f} FBC\n"
-          f"Conversion: {min_bid_raw:,} units. 1,000,000 = {min_bid_fbc:.6f}\n\n"
+          f"Minimum bid:\n"
+          f"{min_bid_display} FBC\n"
+          f"({min_bid_raw_display} Raw)\n"
           f"State: {data.get('state', 'N/A')}",
         )
+        rollout_height = data.get("rolloutHeight")
+        if isinstance(rollout_height, (int, float)) and int(rollout_height) > 0:
+          self.offer_rollout_reminder(name, int(rollout_height))
+        self.offer_add_to_watchlist(name)
       else:
         self.auction_info_text.delete(1.0, tk.END)
         self.auction_info_text.insert(tk.END, f"Error: {result.stderr}")
@@ -6537,6 +6618,8 @@ class FBDManager:
       "custom_datadir": "",
       "custom_dns_port": "",
       "saved_addresses": [],
+      "rollout_reminders": [],
+      "watchlist": [],
     }
 
     try:
@@ -6573,6 +6656,8 @@ class FBDManager:
       "rpc_port": self.rpc_port_var.get(),
       "auto_restart": self.auto_restart_var.get(),
       "restart_delay": self.restart_delay_var.get(),
+      "rollout_reminders": self.rollout_reminders,
+      "watchlist": self.watchlist,
     }
 
     # Add custom settings if they exist
@@ -6628,6 +6713,10 @@ class FBDManager:
     self.rpc_port_var.set(self.config.get("rpc_port", "32869"))
     self.auto_restart_var.set(self.config.get("auto_restart", False))
     self.restart_delay_var.set(self.config.get("restart_delay", "3"))
+    reminders = self.config.get("rollout_reminders", [])
+    self.rollout_reminders = reminders if isinstance(reminders, list) else []
+    watchlist_data = self.config.get("watchlist", [])
+    self.watchlist = watchlist_data if isinstance(watchlist_data, list) else []
 
     # Load custom settings if they exist
     if hasattr(self, "custom_datadir_var"):
@@ -6696,6 +6785,8 @@ class FBDManager:
         "restart_delay": "3",
         "custom_datadir": "",
         "custom_dns_port": "",
+        "rollout_reminders": [],
+        "watchlist": [],
       }
       self.load_saved_settings()
       messagebox.showinfo("Success", "Settings reset to defaults")
@@ -8265,6 +8356,599 @@ to access config and log files!
       return None
     except Exception:
       return None
+
+  def offer_rollout_reminder(self, name, rollout_height):
+    """Offer rollout reminder options when rolloutHeight is available."""
+    if self.has_rollout_reminder(name, rollout_height):
+      existing = [
+        r for r in self.rollout_reminders
+        if r.get("name") == name
+        and int(r.get("rollout_height", 0)) == int(rollout_height)
+        and not r.get("fired", False)
+      ]
+      reminder_lines = "\n".join(
+        f"  \u2022 {r.get('label', r.get('mode', 'unknown'))}" for r in existing
+      )
+      messagebox.showinfo(
+        "Reminder Already Set",
+        f"Rollout reminders already set for '{name}' (release block {rollout_height:,}):\n\n{reminder_lines}\n\nUse 'Rollout Reminders' to manage them.",
+      )
+      return
+
+    if not messagebox.askyesno(
+      "Rollout Reminder",
+      f"Name '{name}' has rolloutHeight {rollout_height:,}.\n\n"
+      "Would you like a reminder before or when it becomes available?",
+    ):
+      return
+
+    self.show_rollout_reminder_dialog(name, rollout_height)
+
+  def show_rollout_reminder_dialog(self, name, rollout_height):
+    """Prompt for one or more rollout reminder triggers."""
+    dialog = tk.Toplevel(self.root)
+    dialog.title(f"Rollout Reminder: {name}")
+    dialog.geometry("520x250")
+    dialog.resizable(False, False)
+    dialog.transient(self.root)
+    dialog.grab_set()
+
+    current_height = self._get_current_height_silent()
+
+    frame = ttk.Frame(dialog, padding=15)
+    frame.pack(fill="both", expand=True)
+
+    status_text = (
+      f"Release block: {rollout_height:,}\nCurrent block: {current_height:,}"
+      if current_height is not None
+      else f"Release block: {rollout_height:,}\nCurrent block: unavailable"
+    )
+    ttk.Label(frame, text=status_text, justify="left").pack(
+      anchor="w", pady=(0, 10)
+    )
+
+    notify_at_release_var = tk.BooleanVar(value=True)
+    notify_blocks_var = tk.BooleanVar(value=False)
+    notify_hours_var = tk.BooleanVar(value=False)
+    blocks_before_var = tk.StringVar(value="10")
+    hours_before_var = tk.StringVar(value="48")
+
+    ttk.Checkbutton(
+      frame,
+      text="Notify at release block",
+      variable=notify_at_release_var,
+    ).pack(anchor="w", pady=2)
+
+    blocks_row = ttk.Frame(frame)
+    blocks_row.pack(fill="x", pady=2)
+    ttk.Checkbutton(
+      blocks_row,
+      text="Notify blocks before:",
+      variable=notify_blocks_var,
+    ).pack(side="left")
+    ttk.Entry(blocks_row, textvariable=blocks_before_var, width=8).pack(
+      side="left", padx=(8, 4)
+    )
+    ttk.Label(blocks_row, text="blocks").pack(side="left")
+
+    minutes_row = ttk.Frame(frame)
+    minutes_row.pack(fill="x", pady=2)
+    ttk.Checkbutton(
+      minutes_row,
+      text="Notify hours before:",
+      variable=notify_hours_var,
+    ).pack(side="left")
+    ttk.Entry(minutes_row, textvariable=hours_before_var, width=8).pack(
+      side="left", padx=(19, 4)
+    )
+    ttk.Label(minutes_row, text="hours (approx, 30 blocks/hour)").pack(side="left")
+
+    def save_reminders():
+      added = 0
+
+      if not any(
+        [
+          notify_at_release_var.get(),
+          notify_blocks_var.get(),
+          notify_hours_var.get(),
+        ]
+      ):
+        messagebox.showwarning(
+          "No Reminder Selected",
+          "Select at least one rollout reminder option.",
+          parent=dialog,
+        )
+        return
+
+      if notify_at_release_var.get():
+        added += self.add_rollout_reminder(
+          name,
+          rollout_height,
+          rollout_height,
+          "at release block",
+          lead_blocks=0,
+          mode="release",
+        )
+
+      if notify_blocks_var.get():
+        try:
+          blocks_before = int(blocks_before_var.get().strip())
+          if blocks_before <= 0:
+            raise ValueError()
+        except ValueError:
+          messagebox.showwarning(
+            "Invalid Blocks",
+            "Enter a positive whole number for blocks before release.",
+            parent=dialog,
+          )
+          return
+
+        added += self.add_rollout_reminder(
+          name,
+          rollout_height,
+          rollout_height - blocks_before,
+          f"{blocks_before:,} blocks before release",
+          lead_blocks=blocks_before,
+          mode="blocks",
+        )
+
+      if notify_hours_var.get():
+        try:
+          hours_before = int(hours_before_var.get().strip())
+          if hours_before <= 0:
+            raise ValueError()
+        except ValueError:
+          messagebox.showwarning(
+            "Invalid Hours",
+            "Enter a positive whole number for hours before release.",
+            parent=dialog,
+          )
+          return
+
+        lead_blocks = max(1, hours_before * 30)
+        added += self.add_rollout_reminder(
+          name,
+          rollout_height,
+          rollout_height - lead_blocks,
+          f"about {hours_before:,} hours before release (~{lead_blocks:,} blocks)",
+          lead_blocks=lead_blocks,
+          mode="hours",
+        )
+
+      if added > 0:
+        dialog.destroy()
+        messagebox.showinfo(
+          "Rollout Reminder",
+          f"Saved {added} rollout reminder(s) for '{name}'.",
+        )
+      else:
+        messagebox.showinfo(
+          "Rollout Reminder",
+          f"No new reminders were added for '{name}'.",
+          parent=dialog,
+        )
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x", pady=(15, 0))
+    ttk.Button(button_row, text="Save", command=save_reminders).pack(
+      side="right", padx=(8, 0)
+    )
+    ttk.Button(button_row, text="Cancel", command=dialog.destroy).pack(
+      side="right"
+    )
+
+  def has_rollout_reminder(self, name, rollout_height):
+    """Return True when a pending reminder already exists for this rollout."""
+    rollout_height = int(rollout_height)
+    return any(
+      reminder.get("name") == name
+      and int(reminder.get("rollout_height", 0)) == rollout_height
+      and not reminder.get("fired", False)
+      for reminder in self.rollout_reminders
+    )
+
+  def show_rollout_reminders_manager(self):
+    """Show a small UI for viewing and removing pending rollout reminders."""
+    dialog = tk.Toplevel(self.root)
+    dialog.title("Pending Rollout Reminders")
+    dialog.geometry("760x320")
+    dialog.transient(self.root)
+
+    frame = ttk.Frame(dialog, padding=10)
+    frame.pack(fill="both", expand=True)
+
+    current_height = self._get_current_height_silent()
+    current_text = (
+      f"Current block: {current_height:,}"
+      if current_height is not None
+      else "Current block: unavailable"
+    )
+    ttk.Label(frame, text=current_text).pack(anchor="w", pady=(0, 8))
+
+    columns = ("name", "release", "trigger", "lead")
+    tree = ttk.Treeview(frame, columns=columns, show="headings", height=10)
+    tree.heading("name", text="Name")
+    tree.heading("release", text="Release Block")
+    tree.heading("trigger", text="Trigger Block")
+    tree.heading("lead", text="Reminder")
+    tree.column("name", width=180)
+    tree.column("release", width=110, anchor="center")
+    tree.column("trigger", width=110, anchor="center")
+    tree.column("lead", width=320)
+    tree.pack(fill="both", expand=True)
+
+    empty_label = ttk.Label(frame, text="No pending rollout reminders.")
+
+    def refresh_tree():
+      for item in tree.get_children():
+        tree.delete(item)
+
+      reminders = sorted(
+        [r for r in self.rollout_reminders if not r.get("fired", False)],
+        key=lambda reminder: (
+          int(reminder.get("trigger_block", 0)),
+          str(reminder.get("name", "")),
+        ),
+      )
+
+      if reminders:
+        empty_label.pack_forget()
+        for reminder in reminders:
+          reminder_id = reminder.get("id") or f"row-{len(tree.get_children())}"
+          tree.insert(
+            "",
+            tk.END,
+            iid=reminder_id,
+            values=(
+              reminder.get("name", ""),
+              f"{int(reminder.get('rollout_height', 0)):,}",
+              f"{int(reminder.get('trigger_block', 0)):,}",
+              reminder.get("label", ""),
+            ),
+          )
+      else:
+        empty_label.pack(anchor="w", pady=(8, 0))
+
+    def remove_selected():
+      selected = tree.selection()
+      if not selected:
+        messagebox.showwarning(
+          "No Selection",
+          "Please select at least one rollout reminder to remove.",
+          parent=dialog,
+        )
+        return
+
+      selected_ids = set(selected)
+      before_count = len(self.rollout_reminders)
+      self.rollout_reminders = [
+        reminder
+        for reminder in self.rollout_reminders
+        if reminder.get("id") not in selected_ids
+      ]
+      removed = before_count - len(self.rollout_reminders)
+      if removed > 0:
+        self.save_config()
+        self.log(f"Removed {removed} rollout reminder(s)")
+      refresh_tree()
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x", pady=(10, 0))
+    ttk.Button(
+      button_row,
+      text="Remove Selected",
+      command=remove_selected,
+    ).pack(side="left")
+    ttk.Button(button_row, text="Refresh", command=refresh_tree).pack(
+      side="left", padx=(8, 0)
+    )
+    ttk.Button(button_row, text="Close", command=dialog.destroy).pack(side="right")
+
+    refresh_tree()
+
+  # ── Watchlist methods ────────────────────────────────────────────────────────
+
+  def is_on_watchlist(self, name):
+    """Return True if name is already on the watchlist."""
+    return any(w.get("name") == name for w in self.watchlist)
+
+  def add_to_watchlist(self, name, notes=""):
+    """Add a name to the watchlist if not already present. Returns True if added."""
+    if self.is_on_watchlist(name):
+      return False
+    entry = {
+      "name": name,
+      "added": datetime.now().isoformat(),
+      "notes": notes,
+      "last_state": None,
+      "notified_states": [],
+    }
+    self.watchlist.append(entry)
+    self.save_config()
+    self.log(f"Added '{name}' to watchlist")
+    return True
+
+  def remove_from_watchlist(self, name):
+    """Remove a name from the watchlist. Returns True if removed."""
+    before = len(self.watchlist)
+    self.watchlist = [w for w in self.watchlist if w.get("name") != name]
+    if len(self.watchlist) < before:
+      self.save_config()
+      return True
+    return False
+
+  def offer_add_to_watchlist(self, name):
+    """Offer to add a name to the watchlist after a name lookup."""
+    if self.is_on_watchlist(name):
+      return
+    if messagebox.askyesno(
+      "Add to Watchlist",
+      f"Add '{name}' to your watchlist?\n\n"
+      "You'll be notified if an auction starts for this name.",
+    ):
+      self.add_to_watchlist(name)
+      messagebox.showinfo("Watchlist", f"'{name}' added to watchlist.")
+
+  def show_watchlist_manager(self):
+    """Show the watchlist manager dialog."""
+    dialog = tk.Toplevel(self.root)
+    dialog.title("Watchlist")
+    dialog.geometry("760x400")
+    dialog.transient(self.root)
+
+    frame = ttk.Frame(dialog, padding=10)
+    frame.pack(fill="both", expand=True)
+
+    # Filter row
+    filter_row = ttk.Frame(frame)
+    filter_row.pack(fill="x", pady=(0, 8))
+    ttk.Label(filter_row, text="Filter:").pack(side="left")
+    search_var = tk.StringVar()
+    ttk.Entry(filter_row, textvariable=search_var, width=30).pack(
+      side="left", padx=(6, 0)
+    )
+
+    columns = ("name", "state", "added", "notes")
+    tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
+    tree.heading("name", text="Name")
+    tree.heading("state", text="State")
+    tree.heading("added", text="Added")
+    tree.heading("notes", text="Notes")
+    tree.column("name", width=180)
+    tree.column("state", width=100, anchor="center")
+    tree.column("added", width=170, anchor="center")
+    tree.column("notes", width=270)
+    tree.pack(fill="both", expand=True)
+
+    empty_label = ttk.Label(frame, text="Watchlist is empty.")
+
+    def refresh_tree(filter_text=""):
+      for item in tree.get_children():
+        tree.delete(item)
+      items = list(self.watchlist)
+      if filter_text:
+        ft = filter_text.lower()
+        items = [w for w in items if ft in w.get("name", "").lower()]
+      items = sorted(items, key=lambda w: w.get("name", ""))
+      if items:
+        empty_label.pack_forget()
+        for entry in items:
+          wname = entry.get("name", "")
+          state = entry.get("last_state") or "\u2014"
+          added_raw = entry.get("added", "")
+          try:
+            added_dt = datetime.fromisoformat(added_raw)
+            added_str = added_dt.strftime("%Y-%m-%d %H:%M")
+          except Exception:
+            added_str = added_raw[:16] if added_raw else "\u2014"
+          notes = entry.get("notes", "")
+          tree.insert(
+            "", tk.END, iid=wname, values=(wname, state, added_str, notes)
+          )
+      else:
+        empty_label.pack(anchor="w", pady=(8, 0))
+
+    search_var.trace_add("write", lambda *_: refresh_tree(search_var.get()))
+
+    def use_name():
+      selected = tree.selection()
+      if not selected:
+        messagebox.showwarning(
+          "No Selection", "Select a name first.", parent=dialog
+        )
+        return
+      self.name_var.set(selected[0])
+      dialog.destroy()
+
+    def open_auction():
+      selected = tree.selection()
+      if not selected:
+        messagebox.showwarning(
+          "No Selection", "Select a name first.", parent=dialog
+        )
+        return
+      self.name_var.set(selected[0])
+      dialog.destroy()
+      self.send_open()
+
+    def remove_selected():
+      selected = tree.selection()
+      if not selected:
+        messagebox.showwarning(
+          "No Selection",
+          "Select at least one name to remove.",
+          parent=dialog,
+        )
+        return
+      for wname in selected:
+        self.remove_from_watchlist(wname)
+      refresh_tree(search_var.get())
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x", pady=(10, 0))
+    ttk.Button(button_row, text="Use Name", command=use_name).pack(side="left")
+    ttk.Button(button_row, text="Open Auction", command=open_auction).pack(
+      side="left", padx=(8, 0)
+    )
+    ttk.Button(
+      button_row, text="Remove Selected", command=remove_selected
+    ).pack(side="left", padx=(8, 0))
+    ttk.Button(
+      button_row,
+      text="Refresh",
+      command=lambda: refresh_tree(search_var.get()),
+    ).pack(side="left", padx=(8, 0))
+    ttk.Button(button_row, text="Close", command=dialog.destroy).pack(
+      side="right"
+    )
+
+    refresh_tree()
+
+  def _emit_watchlist_auction_alert(self, name, state):
+    """Emit a watchlist auction-start alert on the main thread."""
+    state_label = {
+      "OPENING": "auction is opening (bidding starts soon)",
+      "BIDDING": "auction is open for bidding",
+      "REVEAL": "bidding closed \u2014 reveal phase active",
+    }.get(state, f"state changed to {state}")
+    message = f"Watchlist: '{name}' \u2014 {state_label}."
+    self.log(f"[!] {message}")
+    self.notification_manager.add_notification(
+      "watchlist_alert", name, message, level="info"
+    )
+    messagebox.showinfo("Watchlist Alert", message)
+
+  def add_rollout_reminder(
+    self, name, rollout_height, trigger_block, label, lead_blocks=0, mode="release"
+  ):
+    """Add a rollout reminder if an equivalent reminder does not already exist."""
+    trigger_block = int(trigger_block)
+    rollout_height = int(rollout_height)
+    lead_blocks = int(lead_blocks)
+
+    reminder_id = f"{name}:{rollout_height}:{mode}:{lead_blocks}:{trigger_block}"
+    if any(r.get("id") == reminder_id for r in self.rollout_reminders):
+      return 0
+
+    reminder = {
+      "id": reminder_id,
+      "name": name,
+      "rollout_height": rollout_height,
+      "trigger_block": trigger_block,
+      "label": label,
+      "lead_blocks": lead_blocks,
+      "mode": mode,
+      "created": datetime.now().isoformat(),
+      "fired": False,
+    }
+
+    current_height = self._get_current_height_silent()
+    if current_height is not None and trigger_block <= current_height:
+      self.emit_rollout_reminder(reminder, current_height)
+      return 1
+
+    self.rollout_reminders.append(reminder)
+    self.save_config()
+    self.log(
+      f"Saved rollout reminder for '{name}' at block {trigger_block:,} ({label})"
+    )
+    return 1
+
+  def emit_rollout_reminder(self, reminder, current_height):
+    """Emit a one-time reminder notification for a rollout trigger."""
+    name = reminder.get("name", "")
+    rollout_height = int(reminder.get("rollout_height", 0))
+    trigger_block = int(reminder.get("trigger_block", rollout_height))
+    label = reminder.get("label", "rollout reminder")
+
+    if trigger_block >= rollout_height:
+      message = (
+        f"Name '{name}' is available now at rollout block {rollout_height:,}."
+      )
+    else:
+      message = (
+        f"Name '{name}' release is approaching: {label}. "
+        f"Release block {rollout_height:,}, current block {current_height:,}."
+      )
+
+    self.notification_manager.add_notification(
+      "rollout_reminder",
+      name,
+      message,
+      level="info",
+    )
+    self.log(message)
+    messagebox.showinfo("Rollout Reminder", message)
+
+  def check_rollout_reminders(self):
+    """Fire pending rollout reminders when the current block reaches them."""
+    if not self.rollout_reminders:
+      return
+
+    current_height = self._get_current_height_silent()
+    if current_height is None:
+      return
+
+    changed = False
+    remaining = []
+    for reminder in self.rollout_reminders:
+      trigger_block = int(reminder.get("trigger_block", 0))
+      if reminder.get("fired", False) or current_height < trigger_block:
+        remaining.append(reminder)
+        continue
+
+      reminder["fired"] = True
+      self.emit_rollout_reminder(reminder, current_height)
+      changed = True
+
+    if changed:
+      self.rollout_reminders = [
+        reminder for reminder in remaining if not reminder.get("fired", False)
+      ]
+      self.save_config()
+
+  def check_watchlist_auction_start(self):
+    """Check watchlist names for auction-state changes every ~60 seconds."""
+    if not self.watchlist:
+      return
+    self._watchlist_check_tick += 1
+    if self._watchlist_check_tick < 12:
+      return
+    self._watchlist_check_tick = 0
+    threading.Thread(
+      target=self._check_watchlist_states_thread, daemon=True
+    ).start()
+
+  def _check_watchlist_states_thread(self):
+    """Background: query getnameinfo state for all watchlist names."""
+    ACTIVE_STATES = {"OPENING", "BIDDING", "REVEAL"}
+    changed = False
+    for entry in list(self.watchlist):
+      name = entry.get("name", "")
+      if not name:
+        continue
+      try:
+        result = self.rpc_call("getnameinfo", [name])
+        if not isinstance(result, dict):
+          continue
+        state = result.get("state")
+        if state is None:
+          continue
+        old_state = entry.get("last_state")
+        if state != old_state:
+          entry["last_state"] = state
+          changed = True
+          notified = entry.get("notified_states") or []
+          if state in ACTIVE_STATES and state not in notified:
+            notified = list(notified) + [state]
+            entry["notified_states"] = notified
+            self.root.after(
+              0, self._emit_watchlist_auction_alert, name, state
+            )
+      except Exception:
+        pass
+    if changed:
+      self.save_config()
 
   def get_wallet_info_silent(self, wallet):
     """

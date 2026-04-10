@@ -14,6 +14,7 @@ Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026
 import os
 import sys
 import subprocess
+import signal
 
 
 def check_and_install_dependencies():
@@ -135,6 +136,37 @@ def check_and_install_dependencies():
 
 # Run dependency check before imports
 check_and_install_dependencies()
+
+
+def format_process_exit_code(exit_code):
+  """Format process exit code and include signal name for signal-terminated processes."""
+  if exit_code is None:
+    return "unknown"
+
+  if exit_code < 0:
+    signal_number = -exit_code
+    try:
+      signal_name = signal.Signals(signal_number).name
+    except ValueError:
+      signal_name = f"SIG{signal_number}"
+    return f"{exit_code} (signal {signal_name})"
+
+  return str(exit_code)
+
+
+def get_process_exit_hint(exit_code):
+  """Return a short diagnostic hint for notable process exit codes."""
+  if exit_code is None or exit_code >= 0:
+    return None
+
+  signal_number = -exit_code
+  if signal_number == signal.SIGILL:
+    return (
+      "Likely cause: unsupported CPU instruction set in this miner build "
+      "or a corrupted binary."
+    )
+
+  return None
 
 # ============================================================================
 # IMPORTS - Only reached if dependencies are satisfied
@@ -3759,7 +3791,12 @@ class FBDManager:
         return
 
       if exit_code != 0:
-        self.log(f"[!] Pool miner exited with exit code: {exit_code}")
+        self.log(
+          f"[!] Pool miner exited with exit code: {format_process_exit_code(exit_code)}"
+        )
+        hint = get_process_exit_hint(exit_code)
+        if hint:
+          self.log(f"[HINT] {hint}")
       else:
         self.log("Pool miner exited cleanly (exit code 0)")
 
@@ -3812,7 +3849,12 @@ class FBDManager:
 
       # Detect crash
       if exit_code != 0:
-        self.log(f"[!] Node crashed with exit code: {exit_code}")
+        self.log(
+          f"[!] Node crashed with exit code: {format_process_exit_code(exit_code)}"
+        )
+        hint = get_process_exit_hint(exit_code)
+        if hint:
+          self.log(f"[HINT] {hint}")
       else:
         self.log("Node exited cleanly (exit code 0)")
 
