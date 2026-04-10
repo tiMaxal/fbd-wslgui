@@ -367,7 +367,7 @@ class NotificationManager:
     self.add_notification(
       "revealed",
       name,
-      f"Revealed {num_bids} bid(s) successfully",
+      f"Submitted reveal for {num_bids} bid(s)",
       job_id,
       "success",
     )
@@ -731,6 +731,16 @@ class AuctionMonitor:
 
     # Load and check jobs
     jobs_data = self.manager.load_auction_jobs()
+    active_jobs = [
+      job
+      for job in jobs_data["jobs"]
+      if job.get("auto_enabled", False)
+      and job.get("status") not in ["registered", "lost", "failed"]
+    ]
+    self.manager.log(
+      f"Automation check: block={current_height}, active_jobs={len(active_jobs)}",
+      "debug",
+    )
 
     for job in jobs_data["jobs"]:
       # Skip if automation disabled
@@ -761,6 +771,10 @@ class AuctionMonitor:
       return
 
     state = name_info.get("state", "UNKNOWN")
+    self.manager.log(
+      f"Automation check: {job['name']} state={state}, status={job['status']}",
+      "debug",
+    )
 
     # Log state checks (debug level - only occasionally)
     if (
@@ -1811,7 +1825,7 @@ class FBDManager:
     )
     self.send_address_combo.grid(row=0, column=1, sticky="ew", pady=2)
     ttk.Button(
-      send_frame, text="[*]3/4", command=self.save_current_address, width=3
+      send_frame, text="Save", command=self.save_current_address, width=5
     ).grid(row=0, column=2, padx=(2, 0))
 
     ttk.Label(send_frame, text="Amount (FBC):").grid(
@@ -1894,7 +1908,7 @@ class FBDManager:
 
     # Stage 6: Job Manager UI
     jobs_frame = ttk.LabelFrame(
-      scrollable_frame, text="[*] Active Automation Jobs", padding=5
+      scrollable_frame, text="Active Automation Jobs", padding=5
     )
     jobs_frame.pack(fill="x", padx=10, pady=5)
 
@@ -1909,6 +1923,7 @@ class FBDManager:
       "Wallet",
       "Bid Amount",
       "Lockup",
+      "Winning Cost",
       "Progress",
       "Created",
     )
@@ -1922,6 +1937,7 @@ class FBDManager:
     self.jobs_tree.heading("Wallet", text="Wallet")
     self.jobs_tree.heading("Bid Amount", text="Bid Amount")
     self.jobs_tree.heading("Lockup", text="Lockup (Bid+Blind)")
+    self.jobs_tree.heading("Winning Cost", text="Winning Cost")
     self.jobs_tree.heading("Progress", text="Progress")
     self.jobs_tree.heading("Created", text="Created")
 
@@ -1930,6 +1946,7 @@ class FBDManager:
     self.jobs_tree.column("Wallet", width=70)
     self.jobs_tree.column("Bid Amount", width=80)
     self.jobs_tree.column("Lockup", width=90)
+    self.jobs_tree.column("Winning Cost", width=95)
     self.jobs_tree.column("Progress", width=180)
     self.jobs_tree.column("Created", width=90)
 
@@ -1974,7 +1991,7 @@ class FBDManager:
 
     # IMPORT AUCTIONS FROM WALLET
     import_frame = ttk.LabelFrame(
-      scrollable_frame, text="[*][YEN] Import Existing Auctions", padding=10
+      scrollable_frame, text="Import Existing Auctions", padding=10
     )
     import_frame.pack(fill="x", padx=10, pady=5)
 
@@ -1988,7 +2005,7 @@ class FBDManager:
 
     import_btn = ttk.Button(
       import_frame,
-      text="[*][*] Scan & Import Wallet Auctions",
+      text="Scan & Import Wallet Auctions",
       command=self.import_wallet_auctions,
     )
     import_btn.pack()
@@ -2079,7 +2096,7 @@ class FBDManager:
 
     # Stage 4: Notification widget
     notification_frame = ttk.LabelFrame(
-      scrollable_frame, text="[*] Automation Notifications", padding=5
+      scrollable_frame, text="Automation Notifications", padding=5
     )
     notification_frame.pack(fill="x", padx=10, pady=5)
 
@@ -2225,14 +2242,14 @@ class FBDManager:
 
     ttk.Radiobutton(
       method_frame,
-      text="[*][!] Lookup by Name (requires running node)",
+      text="Lookup by Name (requires running node)",
       variable=self.calc_input_method,
       value="name",
       command=self.toggle_calc_input_method,
     ).pack(side="left", padx=10)
     ttk.Radiobutton(
       method_frame,
-      text="[*] Manual Block Entry (works offline)",
+      text="Manual Block Entry (works offline)",
       variable=self.calc_input_method,
       value="manual",
       command=self.toggle_calc_input_method,
@@ -2254,7 +2271,7 @@ class FBDManager:
     )
     ttk.Button(
       name_entry_frame,
-      text="[*][*] Lookup Auction Info",
+      text="Lookup Auction Info",
       command=self.lookup_name_for_calc,
     ).pack(side="left", padx=5)
     ttk.Button(
@@ -3220,7 +3237,7 @@ class FBDManager:
 
     # Miner binary management
     miner_frame = ttk.LabelFrame(
-      scrollable_frame, text="[>>] Miner Binary Management", padding=10
+      scrollable_frame, text="Miner Binary Management", padding=10
     )
     miner_frame.pack(fill="x", padx=10, pady=5)
 
@@ -3333,7 +3350,7 @@ class FBDManager:
 
     # Email Notifications (moved from Node tab)
     email_frame = ttk.LabelFrame(
-      scrollable_frame, text="[*][SECT] Email Notifications (Optional)", padding=10
+      scrollable_frame, text="Email Notifications (Optional)", padding=10
     )
     email_frame.pack(fill="x", padx=10, pady=5)
 
@@ -5424,9 +5441,18 @@ class FBDManager:
       # Load jobs from file
       jobs_data = self.load_auction_jobs()
       jobs = jobs_data.get("jobs", []) # Extract jobs list from dict
+      jobs_changed = False
+
+      # Backfill missing fields for older/imported jobs.
+      for job in jobs:
+        if self._ensure_job_schema(job):
+          jobs_changed = True
 
       # Sort by created time (most recent first)
-      jobs.sort(key=lambda j: j.get("created", ""), reverse=True)
+      jobs.sort(
+        key=lambda j: j.get("created", j.get("created_at", "")),
+        reverse=True,
+      )
 
       # Add jobs to tree
       for job in jobs:
@@ -5435,7 +5461,9 @@ class FBDManager:
         # Skip very old completed jobs (older than 24 hours)
         if status in ["registered", "lost", "failed"]:
           try:
-            created = datetime.fromisoformat(job.get("created", ""))
+            created = datetime.fromisoformat(
+              job.get("created", job.get("created_at", ""))
+            )
             age_hours = (datetime.now() - created).total_seconds() / 3600
             if age_hours > 24:
               continue
@@ -5445,17 +5473,28 @@ class FBDManager:
         # Format values
         name = job.get("name", "N/A")
         wallet = job.get("wallet", "N/A")[:15] # Truncate long wallet names
-        bid_amount = f"{job.get('bid_amount', 'N/A')} FBC"
-        lockup_amount = f"{job.get('lockup_amount', 'N/A')} FBC"
+
+        snapshot = self._build_job_snapshot(job)
+        if self._sync_job_status_from_chain(job, snapshot):
+          jobs_changed = True
+          status = job.get("status", status)
+          snapshot = self._build_job_snapshot(job)
+
+        historical_bid = self._get_original_bid_amount(job, snapshot)
+        bid_amount = f"{self._format_fbc(historical_bid)} FBC"
+        lockup_amount = f"{self._format_fbc(job.get('lockup_amount', 0))} FBC"
+        winning_cost = self._get_winning_cost_text(job, snapshot)
 
         # Get status emoji and text
         status_text = self._get_job_status_text(status)
 
         # Get progress text
-        progress_text = self._get_job_progress_text(job)
+        progress_text = self._get_job_progress_text(job, snapshot)
 
         # Get relative time
-        created_text = self._get_relative_time(job.get("created", ""))
+        created_text = self._get_relative_time(
+          job.get("created", job.get("created_at", ""))
+        )
 
         # Insert into tree
         self.jobs_tree.insert(
@@ -5467,11 +5506,15 @@ class FBDManager:
             wallet,
             bid_amount,
             lockup_amount,
+            winning_cost,
             progress_text,
             created_text,
           ),
           tags=(status,),
         )
+
+      if jobs_changed:
+        self.save_auction_jobs(jobs_data)
 
       # Update tag colors
       self.jobs_tree.tag_configure("registered", foreground="green")
@@ -5488,8 +5531,8 @@ class FBDManager:
     status_map = {
       "pending_open": "[ ] Waiting to open",
       "opened": "[*] Opened (BIDDING)",
-      "bid_placed": "[*]o Bid placed (REVEAL)",
-      "revealed": "[*]- Revealed (Award pending)",
+      "bid_placed": "Bid placed",
+      "revealed": "Revealed",
       "registered": "[OK] SUCCESS - Registered!",
       "lost": "[X] Lost auction",
       "failed": "[!] Failed",
@@ -5497,7 +5540,7 @@ class FBDManager:
     }
     return status_map.get(status, f"[!] {status}")
 
-  def _get_job_progress_text(self, job):
+  def _get_job_progress_text(self, job, snapshot=None):
     """Get progress description text"""
     status = job.get("status", "unknown")
 
@@ -5506,9 +5549,16 @@ class FBDManager:
     elif status == "opened":
       return "Waiting for BIDDING phase..."
     elif status == "bid_placed":
-      return "Waiting for REVEAL phase..."
+      return "Awaiting reveal"
     elif status == "revealed":
-      return "Checking auction results..."
+      if snapshot is None:
+        snapshot = self._build_job_snapshot(job)
+      outcome = snapshot.get("outcome", "unknown")
+      if outcome == "won":
+        return "Await REGISTER"
+      elif outcome == "lost":
+        return "Await REDEEM"
+      return "Await REGISTER/REDEEM"
     elif status == "registered":
       txid = job.get("txid", "")
       return (
@@ -5523,6 +5573,246 @@ class FBDManager:
       return "Cancelled by user"
     else:
       return status
+
+  def _to_float(self, value, default=0.0):
+    """Safely convert values to float."""
+    try:
+      return float(value)
+    except (TypeError, ValueError):
+      return default
+
+  def _format_fbc(self, value):
+    """Format FBC amount without trailing zeros."""
+    amount = self._to_float(value, 0.0)
+    text = f"{amount:.6f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+  def _ensure_job_schema(self, job):
+    """Backfill missing fields for imported/legacy jobs."""
+    changed = False
+
+    if "txids" not in job or not isinstance(job.get("txids"), dict):
+      job["txids"] = {"open": None, "bid": None, "reveal": [], "register": None}
+      changed = True
+    else:
+      defaults = {"open": None, "bid": None, "reveal": [], "register": None}
+      for key, default in defaults.items():
+        if key not in job["txids"]:
+          job["txids"][key] = default
+          changed = True
+      if not isinstance(job["txids"].get("reveal"), list):
+        reveal_val = job["txids"].get("reveal")
+        job["txids"]["reveal"] = [reveal_val] if reveal_val else []
+        changed = True
+
+    if "block_heights" not in job or not isinstance(job.get("block_heights"), dict):
+      job["block_heights"] = {
+        "opened_at": None,
+        "bid_placed_at": None,
+        "revealed_at": None,
+        "registered_at": None,
+      }
+      changed = True
+    else:
+      for key in ["opened_at", "bid_placed_at", "revealed_at", "registered_at"]:
+        if key not in job["block_heights"]:
+          job["block_heights"][key] = None
+          changed = True
+
+    if "error_log" not in job or not isinstance(job.get("error_log"), list):
+      job["error_log"] = []
+      changed = True
+
+    if "retry_count" not in job:
+      job["retry_count"] = 0
+      changed = True
+
+    if "original_bid_amount" not in job:
+      job["original_bid_amount"] = str(job.get("bid_amount", 0))
+      changed = True
+
+    if "created" not in job:
+      created_at = job.get("created_at")
+      if isinstance(created_at, (int, float)):
+        job["created"] = datetime.fromtimestamp(created_at).isoformat()
+      elif isinstance(created_at, str):
+        job["created"] = created_at
+      else:
+        job["created"] = datetime.now().isoformat()
+      changed = True
+
+    return changed
+
+  def _get_auction_bids_silent(self, name):
+    """Get all bids for a name. Returns [] when unavailable."""
+    try:
+      cmd, _ = self.get_fbdctl_command("getauctionbids", name)
+      result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=Path(self.fbd_path_var.get()).parent,
+        timeout=10,
+      )
+      if result.returncode != 0:
+        return []
+
+      response = json.loads(result.stdout)
+      data = response.get("result", {}) if isinstance(response, dict) else response
+      bids = data.get("bids", []) if isinstance(data, dict) else []
+      return bids if isinstance(bids, list) else []
+    except Exception:
+      return []
+
+  def _build_job_snapshot(self, job):
+    """Build live auction context used by progress and winning cost."""
+    snapshot = {
+      "state": "UNKNOWN",
+      "outcome": "unknown", # won | lost | unknown
+      "original_bid": self._to_float(
+        job.get("original_bid_amount", job.get("bid_amount", 0))
+      ),
+      "has_higher_unrevealed_lockup": False,
+      "has_revealed_rival_above": False,
+      "next_highest_rival": 0.0,
+      "can_compute_cost": False,
+    }
+
+    name = job.get("name")
+    wallet = job.get("wallet")
+    if not name or not wallet:
+      return snapshot
+
+    name_info = self.get_name_info_silent(name) or {}
+    snapshot["state"] = name_info.get("state", "UNKNOWN")
+    can_register = bool(name_info.get("canRegister", False))
+
+    our_bids = self.get_wallet_bids_silent(wallet, name) or []
+    revealed_ours = [b for b in our_bids if b.get("revealed", False)]
+    if snapshot["original_bid"] <= 0 and revealed_ours:
+      snapshot["original_bid"] = max(
+        [self._to_float(b.get("value", 0)) for b in revealed_ours],
+        default=0.0,
+      )
+
+    all_bids = self._get_auction_bids_silent(name)
+
+    our_signatures = set()
+    for b in our_bids:
+      our_signatures.add(
+        (
+          round(self._to_float(b.get("value", 0)), 8),
+          round(self._to_float(b.get("lockup", 0)), 8),
+        )
+      )
+
+    rival_bids = []
+    for b in all_bids:
+      sig = (
+        round(self._to_float(b.get("value", 0)), 8),
+        round(self._to_float(b.get("lockup", 0)), 8),
+      )
+      if sig not in our_signatures:
+        rival_bids.append(b)
+
+    original_bid = snapshot["original_bid"]
+    revealed_rival_values = []
+    for b in rival_bids:
+      lockup = self._to_float(b.get("lockup", 0))
+      value = self._to_float(b.get("value", 0))
+      revealed = bool(b.get("revealed", False))
+
+      if (not revealed) and lockup > original_bid and snapshot["state"] == "REVEAL":
+        snapshot["has_higher_unrevealed_lockup"] = True
+
+      if revealed and value > original_bid:
+        snapshot["has_revealed_rival_above"] = True
+
+      if revealed:
+        revealed_rival_values.append(value)
+
+    revealed_not_above = [v for v in revealed_rival_values if v <= original_bid]
+    snapshot["next_highest_rival"] = max(revealed_not_above, default=0.0)
+    snapshot["can_compute_cost"] = (
+      not snapshot["has_higher_unrevealed_lockup"]
+      and not snapshot["has_revealed_rival_above"]
+    )
+
+    if can_register:
+      snapshot["outcome"] = "won"
+    elif snapshot["has_revealed_rival_above"]:
+      snapshot["outcome"] = "lost"
+    elif snapshot["state"] == "CLOSED" and snapshot["can_compute_cost"]:
+      snapshot["outcome"] = "won"
+    else:
+      snapshot["outcome"] = "unknown"
+
+    return snapshot
+
+  def _sync_job_status_from_chain(self, job, snapshot):
+    """Promote stale bid_placed jobs to revealed if chain data confirms reveal."""
+    if job.get("status") != "bid_placed":
+      return False
+
+    if snapshot.get("state") not in ["REVEAL", "CLOSED"]:
+      return False
+
+    wallet = job.get("wallet")
+    name = job.get("name")
+    bids = self.get_wallet_bids_silent(wallet, name) if wallet and name else []
+    if not any(b.get("revealed", False) for b in bids):
+      return False
+
+    job["status"] = "revealed"
+    job["updated_at"] = datetime.now().isoformat()
+    if "block_heights" in job and not job["block_heights"].get("revealed_at"):
+      job["block_heights"]["revealed_at"] = self._get_current_height_silent()
+    return True
+
+  def _get_original_bid_amount(self, job, snapshot=None):
+    """Return persisted original bid amount for historical display."""
+    original_bid = self._to_float(
+      job.get("original_bid_amount", job.get("bid_amount", 0))
+    )
+    if original_bid > 0:
+      return original_bid
+
+    if snapshot is None:
+      snapshot = self._build_job_snapshot(job)
+
+    candidate = snapshot.get("original_bid", 0.0)
+    if candidate > 0:
+      job["original_bid_amount"] = str(candidate)
+      return candidate
+    return 0.0
+
+  def _get_winning_cost_text(self, job, snapshot=None):
+    """Compute winning cost according to reveal/competition conditions."""
+    if job.get("status") != "revealed":
+      return "n/a"
+
+    if snapshot is None:
+      snapshot = self._build_job_snapshot(job)
+
+    original_bid = self._get_original_bid_amount(job, snapshot)
+    if original_bid <= 0:
+      return "n/a"
+
+    if snapshot.get("has_higher_unrevealed_lockup"):
+      return "n/a"
+    if snapshot.get("has_revealed_rival_above"):
+      return "n/a"
+    if not snapshot.get("can_compute_cost"):
+      return "n/a"
+
+    next_highest = snapshot.get("next_highest_rival", 0.0)
+    if next_highest <= 0:
+      return "0"
+
+    cost = original_bid - next_highest
+    if cost <= 0:
+      return "n/a"
+    return self._format_fbc(cost)
 
   def _get_relative_time(self, iso_timestamp):
     """Convert ISO timestamp to relative time (e.g., '2h ago')"""
@@ -5760,7 +6050,7 @@ class FBDManager:
     messagebox.showinfo(
       "Saved", f"Address saved!\nTotal saved: {len(saved_addresses)}"
     )
-    self.log(f"[*]3/4 Saved address: {address}")
+    self.log(f"[*] Saved address: {address}")
 
   def load_transactions(self):
     """Load transaction history"""
@@ -7537,8 +7827,14 @@ class FBDManager:
     else:
       display_message = message
 
-    # Update UI only for info and above (skip debug to reduce clutter)
-    if level in ["info", "warning", "error"]:
+    # Show debug lines in UI when log level is debug/trace.
+    configured_level = (
+      self.loglevel_var.get().lower()
+      if hasattr(self, "loglevel_var") and self.loglevel_var.get()
+      else "info"
+    )
+    show_debug = configured_level in ["debug", "trace"]
+    if level in ["info", "warning", "error"] or (level == "debug" and show_debug):
       self.log_text.insert(tk.END, f"{display_message}\n")
       self.log_text.see(tk.END)
 
@@ -9259,14 +9555,25 @@ to access config and log files!
     Add imported auction to automation jobs
     Extracts bid/lockup amounts from existing bids
     """
-    # Get bid amounts from first bid
-    bid_amount = 0
-    lockup_amount = 0
+    # Preserve historical bid and lockup using the strongest values from wallet bids.
+    bid_amount = 0.0
+    lockup_amount = 0.0
 
     if bids and len(bids) > 0:
-      first_bid = bids[0]
-      bid_amount = first_bid.get("value", 0) / 1000000 # Convert from atoms
-      lockup_amount = first_bid.get("lockup", 0) / 1000000 # Convert from atoms
+      for bid in bids:
+        value = self._to_float(bid.get("value", 0))
+        lockup = self._to_float(bid.get("lockup", 0))
+
+        # Some RPC shapes report atoms; convert only when value is atom-like.
+        if value > 1000000:
+          value = value / 1000000
+        if lockup > 1000000:
+          lockup = lockup / 1000000
+
+        if value > bid_amount:
+          bid_amount = value
+        if lockup > lockup_amount:
+          lockup_amount = lockup
 
     # Create job
     job_id = str(uuid.uuid4())
@@ -9278,11 +9585,22 @@ to access config and log files!
       "name": name,
       "wallet": wallet,
       "bid_amount": bid_amount,
+      "original_bid_amount": bid_amount,
       "lockup_amount": lockup_amount,
       "status": status,
       "auto_enabled": True,
+      "created": datetime.now().isoformat(),
       "created_at": datetime.now().isoformat(),
       "updated_at": datetime.now().isoformat(),
+      "txids": {"open": None, "bid": None, "reveal": [], "register": None},
+      "block_heights": {
+        "opened_at": None,
+        "bid_placed_at": None,
+        "revealed_at": None,
+        "registered_at": None,
+      },
+      "error_log": [],
+      "retry_count": 0,
       "imported": True, # Flag to indicate this was imported
     }
 
@@ -9351,9 +9669,11 @@ to access config and log files!
         "name": name,
         "wallet": wallet,
         "bid_amount": str(bid_amount),
+        "original_bid_amount": str(bid_amount),
         "lockup_amount": str(lockup_amount),
         "status": "pending_open", # pending_open, opened, bid_placed, revealed, registered, lost, failed
         "auto_enabled": auto_enabled,
+        "created": datetime.now().isoformat(),
         "created_at": int(time.time()),
         "txids": {"open": None, "bid": None, "reveal": [], "register": None},
         "block_heights": {
@@ -9402,6 +9722,9 @@ to access config and log files!
       if not job:
         self.log(f"[!] Job not found: {job_id[:8]}...")
         return False
+
+      # Imported/older jobs can miss nested fields used below.
+      self._ensure_job_schema(job)
 
       # Update status
       old_status = job["status"]
