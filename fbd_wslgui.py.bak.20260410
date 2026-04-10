@@ -86,7 +86,7 @@ def check_and_install_dependencies():
         .lower()
       )
       if response in ["", "y", "yes"]:
-        print(f"\n[*] Installing packages with {pkg_manager}...")
+        print(f"\n[>>] Installing packages with {pkg_manager}...")
         if pkg_manager == "apt":
           # Run apt update first
           result = subprocess.run(
@@ -399,7 +399,7 @@ class NotificationManager:
     self.add_notification(
       "revealed",
       name,
-      f"Submitted reveal for {num_bids} bid(s)",
+      f"Revealed {num_bids} bid(s) successfully",
       job_id,
       "success",
     )
@@ -763,16 +763,6 @@ class AuctionMonitor:
 
     # Load and check jobs
     jobs_data = self.manager.load_auction_jobs()
-    active_jobs = [
-      job
-      for job in jobs_data["jobs"]
-      if job.get("auto_enabled", False)
-      and job.get("status") not in ["registered", "lost", "failed"]
-    ]
-    self.manager.log(
-      f"Automation check: block={current_height}, active_jobs={len(active_jobs)}",
-      "debug",
-    )
 
     for job in jobs_data["jobs"]:
       # Skip if automation disabled
@@ -803,10 +793,6 @@ class AuctionMonitor:
       return
 
     state = name_info.get("state", "UNKNOWN")
-    self.manager.log(
-      f"Automation check: {job['name']} state={state}, status={job['status']}",
-      "debug",
-    )
 
     # Log state checks (debug level - only occasionally)
     if (
@@ -1258,9 +1244,6 @@ class FBDManager:
     self.calc_refresh_in_progress = False
     self.calc_refresh_retry_count = 0
     self.calc_refresh_max_retries = 6 # 6 retries x 5 seconds = 30 seconds max wait
-    self.rollout_reminders = []
-    self.watchlist = []
-    self._watchlist_check_tick = 0
 
     # Create UI
     self.create_notebook()
@@ -1284,7 +1267,7 @@ class FBDManager:
 
     # Log startup message with diagnostic info
     self.log("=" * 60)
-    self.log("FBD Node Manager GUI v4.1.0 Started")
+    self.log("FBD Node Manager GUI v4.0.0 Started")
     self.log(f"[*][!] Log file: {self.log_file}")
     self.log(f"[*][!] Log directory: {self.log_file.parent}")
     self.log("=" * 60)
@@ -1860,7 +1843,7 @@ class FBDManager:
     )
     self.send_address_combo.grid(row=0, column=1, sticky="ew", pady=2)
     ttk.Button(
-      send_frame, text="Save", command=self.save_current_address, width=5
+      send_frame, text="[*]3/4", command=self.save_current_address, width=3
     ).grid(row=0, column=2, padx=(2, 0))
 
     ttk.Label(send_frame, text="Amount (FBC):").grid(
@@ -1904,13 +1887,7 @@ class FBDManager:
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
     )
 
-    canvas_window = canvas.create_window(
-      (0, 0), window=scrollable_frame, anchor="nw"
-    )
-    canvas.bind(
-      "<Configure>",
-      lambda e: canvas.itemconfigure(canvas_window, width=e.width),
-    )
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
     canvas.configure(yscrollcommand=scrollbar.set)
 
     # Pack canvas and scrollbar
@@ -1930,7 +1907,7 @@ class FBDManager:
     # Info label about setting active wallet
     info_label = ttk.Label(
       balance_info_frame,
-      text="^1 Set the 'Active Wallet' in the Wallet tab before refreshing balance",
+      text="[i] Set the 'Active Wallet' in the Wallet tab before refreshing balance",
       foreground="#666666",
       font=("Arial", 9, "italic"),
     )
@@ -1949,7 +1926,7 @@ class FBDManager:
 
     # Stage 6: Job Manager UI
     jobs_frame = ttk.LabelFrame(
-      scrollable_frame, text="Active Automation Jobs", padding=5
+      scrollable_frame, text="[*] Active Automation Jobs", padding=5
     )
     jobs_frame.pack(fill="x", padx=10, pady=5)
 
@@ -1964,7 +1941,6 @@ class FBDManager:
       "Wallet",
       "Bid Amount",
       "Lockup",
-      "Winning Cost",
       "Progress",
       "Created",
     )
@@ -1978,7 +1954,6 @@ class FBDManager:
     self.jobs_tree.heading("Wallet", text="Wallet")
     self.jobs_tree.heading("Bid Amount", text="Bid Amount")
     self.jobs_tree.heading("Lockup", text="Lockup (Bid+Blind)")
-    self.jobs_tree.heading("Winning Cost", text="Winning Cost")
     self.jobs_tree.heading("Progress", text="Progress")
     self.jobs_tree.heading("Created", text="Created")
 
@@ -1987,7 +1962,6 @@ class FBDManager:
     self.jobs_tree.column("Wallet", width=70)
     self.jobs_tree.column("Bid Amount", width=80)
     self.jobs_tree.column("Lockup", width=90)
-    self.jobs_tree.column("Winning Cost", width=95)
     self.jobs_tree.column("Progress", width=180)
     self.jobs_tree.column("Created", width=90)
 
@@ -2032,7 +2006,7 @@ class FBDManager:
 
     # IMPORT AUCTIONS FROM WALLET
     import_frame = ttk.LabelFrame(
-      scrollable_frame, text="Import Existing Auctions", padding=10
+      scrollable_frame, text="[*][YEN] Import Existing Auctions", padding=10
     )
     import_frame.pack(fill="x", padx=10, pady=5)
 
@@ -2046,7 +2020,7 @@ class FBDManager:
 
     import_btn = ttk.Button(
       import_frame,
-      text="Scan & Import Wallet Auctions",
+      text="[*][*] Scan & Import Wallet Auctions",
       command=self.import_wallet_auctions,
     )
     import_btn.pack()
@@ -2075,20 +2049,10 @@ class FBDManager:
     ttk.Button(name_frame, text="Get Name Info", command=self.get_name_info).grid(
       row=0, column=2, padx=5
     )
-    ttk.Button(
-      name_frame,
-      text="Rollout Reminders",
-      command=self.show_rollout_reminders_manager,
-    ).grid(row=0, column=3, padx=5)
-    ttk.Button(
-      name_frame,
-      text="Watchlist",
-      command=self.show_watchlist_manager,
-    ).grid(row=0, column=4, padx=5)
 
     # Auction actions
     action_frame = ttk.Frame(name_frame)
-    action_frame.grid(row=1, column=0, columnspan=5, pady=10)
+    action_frame.grid(row=1, column=0, columnspan=3, pady=10)
 
     ttk.Button(action_frame, text="Open Auction", command=self.send_open).pack(
       side="left", padx=2
@@ -2147,7 +2111,7 @@ class FBDManager:
 
     # Stage 4: Notification widget
     notification_frame = ttk.LabelFrame(
-      scrollable_frame, text="Automation Notifications", padding=5
+      scrollable_frame, text="[*] Automation Notifications", padding=5
     )
     notification_frame.pack(fill="x", padx=10, pady=5)
 
@@ -2293,14 +2257,14 @@ class FBDManager:
 
     ttk.Radiobutton(
       method_frame,
-      text="Lookup by Name (requires running node)",
+      text="[*][!] Lookup by Name (requires running node)",
       variable=self.calc_input_method,
       value="name",
       command=self.toggle_calc_input_method,
     ).pack(side="left", padx=10)
     ttk.Radiobutton(
       method_frame,
-      text="Manual Block Entry (works offline)",
+      text="[*] Manual Block Entry (works offline)",
       variable=self.calc_input_method,
       value="manual",
       command=self.toggle_calc_input_method,
@@ -2322,7 +2286,7 @@ class FBDManager:
     )
     ttk.Button(
       name_entry_frame,
-      text="Lookup Auction Info",
+      text="[*][*] Lookup Auction Info",
       command=self.lookup_name_for_calc,
     ).pack(side="left", padx=5)
     ttk.Button(
@@ -3131,17 +3095,12 @@ class FBDManager:
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
     scrollable_frame = ttk.Frame(canvas)
 
+    # Configure canvas scrolling
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
     )
 
-    canvas_window = canvas.create_window(
-      (0, 0), window=scrollable_frame, anchor="nw"
-    )
-    canvas.bind(
-      "<Configure>",
-      lambda e: canvas.itemconfigure(canvas_window, width=e.width),
-    )
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
     canvas.configure(yscrollcommand=scrollbar.set)
 
     # Pack canvas and scrollbar
@@ -3293,7 +3252,7 @@ class FBDManager:
 
     # Miner binary management
     miner_frame = ttk.LabelFrame(
-      scrollable_frame, text="Miner Binary Management", padding=10
+      scrollable_frame, text="[>>] Miner Binary Management", padding=10
     )
     miner_frame.pack(fill="x", padx=10, pady=5)
 
@@ -3406,7 +3365,7 @@ class FBDManager:
 
     # Email Notifications (moved from Node tab)
     email_frame = ttk.LabelFrame(
-      scrollable_frame, text="Email Notifications (Optional)", padding=10
+      scrollable_frame, text="[*][SECT] Email Notifications (Optional)", padding=10
     )
     email_frame.pack(fill="x", padx=10, pady=5)
 
@@ -4334,8 +4293,6 @@ class FBDManager:
     """Periodically check node status"""
     if self.monitoring:
       self.refresh_status()
-      self.check_rollout_reminders()
-      self.check_watchlist_auction_start()
       self.root.after(5000, self.monitor_status) # Every 5 seconds
 
   def refresh_status(self):
@@ -5509,18 +5466,9 @@ class FBDManager:
       # Load jobs from file
       jobs_data = self.load_auction_jobs()
       jobs = jobs_data.get("jobs", []) # Extract jobs list from dict
-      jobs_changed = False
-
-      # Backfill missing fields for older/imported jobs.
-      for job in jobs:
-        if self._ensure_job_schema(job):
-          jobs_changed = True
 
       # Sort by created time (most recent first)
-      jobs.sort(
-        key=lambda j: j.get("created", j.get("created_at", "")),
-        reverse=True,
-      )
+      jobs.sort(key=lambda j: j.get("created", ""), reverse=True)
 
       # Add jobs to tree
       for job in jobs:
@@ -5529,9 +5477,7 @@ class FBDManager:
         # Skip very old completed jobs (older than 24 hours)
         if status in ["registered", "lost", "failed"]:
           try:
-            created = datetime.fromisoformat(
-              job.get("created", job.get("created_at", ""))
-            )
+            created = datetime.fromisoformat(job.get("created", ""))
             age_hours = (datetime.now() - created).total_seconds() / 3600
             if age_hours > 24:
               continue
@@ -5541,28 +5487,17 @@ class FBDManager:
         # Format values
         name = job.get("name", "N/A")
         wallet = job.get("wallet", "N/A")[:15] # Truncate long wallet names
-
-        snapshot = self._build_job_snapshot(job)
-        if self._sync_job_status_from_chain(job, snapshot):
-          jobs_changed = True
-          status = job.get("status", status)
-          snapshot = self._build_job_snapshot(job)
-
-        historical_bid = self._get_original_bid_amount(job, snapshot)
-        bid_amount = f"{self._format_fbc(historical_bid)} FBC"
-        lockup_amount = f"{self._format_fbc(job.get('lockup_amount', 0))} FBC"
-        winning_cost = self._get_winning_cost_text(job, snapshot)
+        bid_amount = f"{job.get('bid_amount', 'N/A')} FBC"
+        lockup_amount = f"{job.get('lockup_amount', 'N/A')} FBC"
 
         # Get status emoji and text
         status_text = self._get_job_status_text(status)
 
         # Get progress text
-        progress_text = self._get_job_progress_text(job, snapshot)
+        progress_text = self._get_job_progress_text(job)
 
         # Get relative time
-        created_text = self._get_relative_time(
-          job.get("created", job.get("created_at", ""))
-        )
+        created_text = self._get_relative_time(job.get("created", ""))
 
         # Insert into tree
         self.jobs_tree.insert(
@@ -5574,15 +5509,11 @@ class FBDManager:
             wallet,
             bid_amount,
             lockup_amount,
-            winning_cost,
             progress_text,
             created_text,
           ),
           tags=(status,),
         )
-
-      if jobs_changed:
-        self.save_auction_jobs(jobs_data)
 
       # Update tag colors
       self.jobs_tree.tag_configure("registered", foreground="green")
@@ -5599,8 +5530,8 @@ class FBDManager:
     status_map = {
       "pending_open": "[ ] Waiting to open",
       "opened": "[*] Opened (BIDDING)",
-      "bid_placed": "Bid placed",
-      "revealed": "Revealed",
+      "bid_placed": "[*]o Bid placed (REVEAL)",
+      "revealed": "[*]- Revealed (Award pending)",
       "registered": "[OK] SUCCESS - Registered!",
       "lost": "[X] Lost auction",
       "failed": "[!] Failed",
@@ -5608,7 +5539,7 @@ class FBDManager:
     }
     return status_map.get(status, f"[!] {status}")
 
-  def _get_job_progress_text(self, job, snapshot=None):
+  def _get_job_progress_text(self, job):
     """Get progress description text"""
     status = job.get("status", "unknown")
 
@@ -5617,16 +5548,9 @@ class FBDManager:
     elif status == "opened":
       return "Waiting for BIDDING phase..."
     elif status == "bid_placed":
-      return "Awaiting reveal"
+      return "Waiting for REVEAL phase..."
     elif status == "revealed":
-      if snapshot is None:
-        snapshot = self._build_job_snapshot(job)
-      outcome = snapshot.get("outcome", "unknown")
-      if outcome == "won":
-        return "Await REGISTER"
-      elif outcome == "lost":
-        return "Await REDEEM"
-      return "Await REGISTER/REDEEM"
+      return "Checking auction results..."
     elif status == "registered":
       txid = job.get("txid", "")
       return (
@@ -5641,246 +5565,6 @@ class FBDManager:
       return "Cancelled by user"
     else:
       return status
-
-  def _to_float(self, value, default=0.0):
-    """Safely convert values to float."""
-    try:
-      return float(value)
-    except (TypeError, ValueError):
-      return default
-
-  def _format_fbc(self, value):
-    """Format FBC amount without trailing zeros."""
-    amount = self._to_float(value, 0.0)
-    text = f"{amount:.6f}".rstrip("0").rstrip(".")
-    return text if text else "0"
-
-  def _ensure_job_schema(self, job):
-    """Backfill missing fields for imported/legacy jobs."""
-    changed = False
-
-    if "txids" not in job or not isinstance(job.get("txids"), dict):
-      job["txids"] = {"open": None, "bid": None, "reveal": [], "register": None}
-      changed = True
-    else:
-      defaults = {"open": None, "bid": None, "reveal": [], "register": None}
-      for key, default in defaults.items():
-        if key not in job["txids"]:
-          job["txids"][key] = default
-          changed = True
-      if not isinstance(job["txids"].get("reveal"), list):
-        reveal_val = job["txids"].get("reveal")
-        job["txids"]["reveal"] = [reveal_val] if reveal_val else []
-        changed = True
-
-    if "block_heights" not in job or not isinstance(job.get("block_heights"), dict):
-      job["block_heights"] = {
-        "opened_at": None,
-        "bid_placed_at": None,
-        "revealed_at": None,
-        "registered_at": None,
-      }
-      changed = True
-    else:
-      for key in ["opened_at", "bid_placed_at", "revealed_at", "registered_at"]:
-        if key not in job["block_heights"]:
-          job["block_heights"][key] = None
-          changed = True
-
-    if "error_log" not in job or not isinstance(job.get("error_log"), list):
-      job["error_log"] = []
-      changed = True
-
-    if "retry_count" not in job:
-      job["retry_count"] = 0
-      changed = True
-
-    if "original_bid_amount" not in job:
-      job["original_bid_amount"] = str(job.get("bid_amount", 0))
-      changed = True
-
-    if "created" not in job:
-      created_at = job.get("created_at")
-      if isinstance(created_at, (int, float)):
-        job["created"] = datetime.fromtimestamp(created_at).isoformat()
-      elif isinstance(created_at, str):
-        job["created"] = created_at
-      else:
-        job["created"] = datetime.now().isoformat()
-      changed = True
-
-    return changed
-
-  def _get_auction_bids_silent(self, name):
-    """Get all bids for a name. Returns [] when unavailable."""
-    try:
-      cmd, _ = self.get_fbdctl_command("getauctionbids", name)
-      result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        cwd=Path(self.fbd_path_var.get()).parent,
-        timeout=10,
-      )
-      if result.returncode != 0:
-        return []
-
-      response = json.loads(result.stdout)
-      data = response.get("result", {}) if isinstance(response, dict) else response
-      bids = data.get("bids", []) if isinstance(data, dict) else []
-      return bids if isinstance(bids, list) else []
-    except Exception:
-      return []
-
-  def _build_job_snapshot(self, job):
-    """Build live auction context used by progress and winning cost."""
-    snapshot = {
-      "state": "UNKNOWN",
-      "outcome": "unknown", # won | lost | unknown
-      "original_bid": self._to_float(
-        job.get("original_bid_amount", job.get("bid_amount", 0))
-      ),
-      "has_higher_unrevealed_lockup": False,
-      "has_revealed_rival_above": False,
-      "next_highest_rival": 0.0,
-      "can_compute_cost": False,
-    }
-
-    name = job.get("name")
-    wallet = job.get("wallet")
-    if not name or not wallet:
-      return snapshot
-
-    name_info = self.get_name_info_silent(name) or {}
-    snapshot["state"] = name_info.get("state", "UNKNOWN")
-    can_register = bool(name_info.get("canRegister", False))
-
-    our_bids = self.get_wallet_bids_silent(wallet, name) or []
-    revealed_ours = [b for b in our_bids if b.get("revealed", False)]
-    if snapshot["original_bid"] <= 0 and revealed_ours:
-      snapshot["original_bid"] = max(
-        [self._to_float(b.get("value", 0)) for b in revealed_ours],
-        default=0.0,
-      )
-
-    all_bids = self._get_auction_bids_silent(name)
-
-    our_signatures = set()
-    for b in our_bids:
-      our_signatures.add(
-        (
-          round(self._to_float(b.get("value", 0)), 8),
-          round(self._to_float(b.get("lockup", 0)), 8),
-        )
-      )
-
-    rival_bids = []
-    for b in all_bids:
-      sig = (
-        round(self._to_float(b.get("value", 0)), 8),
-        round(self._to_float(b.get("lockup", 0)), 8),
-      )
-      if sig not in our_signatures:
-        rival_bids.append(b)
-
-    original_bid = snapshot["original_bid"]
-    revealed_rival_values = []
-    for b in rival_bids:
-      lockup = self._to_float(b.get("lockup", 0))
-      value = self._to_float(b.get("value", 0))
-      revealed = bool(b.get("revealed", False))
-
-      if (not revealed) and lockup > original_bid and snapshot["state"] == "REVEAL":
-        snapshot["has_higher_unrevealed_lockup"] = True
-
-      if revealed and value > original_bid:
-        snapshot["has_revealed_rival_above"] = True
-
-      if revealed:
-        revealed_rival_values.append(value)
-
-    revealed_not_above = [v for v in revealed_rival_values if v <= original_bid]
-    snapshot["next_highest_rival"] = max(revealed_not_above, default=0.0)
-    snapshot["can_compute_cost"] = (
-      not snapshot["has_higher_unrevealed_lockup"]
-      and not snapshot["has_revealed_rival_above"]
-    )
-
-    if can_register:
-      snapshot["outcome"] = "won"
-    elif snapshot["has_revealed_rival_above"]:
-      snapshot["outcome"] = "lost"
-    elif snapshot["state"] == "CLOSED" and snapshot["can_compute_cost"]:
-      snapshot["outcome"] = "won"
-    else:
-      snapshot["outcome"] = "unknown"
-
-    return snapshot
-
-  def _sync_job_status_from_chain(self, job, snapshot):
-    """Promote stale bid_placed jobs to revealed if chain data confirms reveal."""
-    if job.get("status") != "bid_placed":
-      return False
-
-    if snapshot.get("state") not in ["REVEAL", "CLOSED"]:
-      return False
-
-    wallet = job.get("wallet")
-    name = job.get("name")
-    bids = self.get_wallet_bids_silent(wallet, name) if wallet and name else []
-    if not any(b.get("revealed", False) for b in bids):
-      return False
-
-    job["status"] = "revealed"
-    job["updated_at"] = datetime.now().isoformat()
-    if "block_heights" in job and not job["block_heights"].get("revealed_at"):
-      job["block_heights"]["revealed_at"] = self._get_current_height_silent()
-    return True
-
-  def _get_original_bid_amount(self, job, snapshot=None):
-    """Return persisted original bid amount for historical display."""
-    original_bid = self._to_float(
-      job.get("original_bid_amount", job.get("bid_amount", 0))
-    )
-    if original_bid > 0:
-      return original_bid
-
-    if snapshot is None:
-      snapshot = self._build_job_snapshot(job)
-
-    candidate = snapshot.get("original_bid", 0.0)
-    if candidate > 0:
-      job["original_bid_amount"] = str(candidate)
-      return candidate
-    return 0.0
-
-  def _get_winning_cost_text(self, job, snapshot=None):
-    """Compute winning cost according to reveal/competition conditions."""
-    if job.get("status") != "revealed":
-      return "n/a"
-
-    if snapshot is None:
-      snapshot = self._build_job_snapshot(job)
-
-    original_bid = self._get_original_bid_amount(job, snapshot)
-    if original_bid <= 0:
-      return "n/a"
-
-    if snapshot.get("has_higher_unrevealed_lockup"):
-      return "n/a"
-    if snapshot.get("has_revealed_rival_above"):
-      return "n/a"
-    if not snapshot.get("can_compute_cost"):
-      return "n/a"
-
-    next_highest = snapshot.get("next_highest_rival", 0.0)
-    if next_highest <= 0:
-      return "0"
-
-    cost = original_bid - next_highest
-    if cost <= 0:
-      return "n/a"
-    return self._format_fbc(cost)
 
   def _get_relative_time(self, iso_timestamp):
     """Convert ISO timestamp to relative time (e.g., '2h ago')"""
@@ -6118,7 +5802,7 @@ class FBDManager:
     messagebox.showinfo(
       "Saved", f"Address saved!\nTotal saved: {len(saved_addresses)}"
     )
-    self.log(f"[*] Saved address: {address}")
+    self.log(f"[*]3/4 Saved address: {address}")
 
   def load_transactions(self):
     """Load transaction history"""
@@ -6220,29 +5904,16 @@ class FBDManager:
           if isinstance(min_bid_raw, (int, float))
           else 0
         )
-        if abs(min_bid_fbc - round(min_bid_fbc)) < 1e-9:
-          min_bid_display = f"{int(round(min_bid_fbc)):,}"
-        else:
-          min_bid_display = f"{min_bid_fbc:,.6f}".rstrip("0").rstrip(".")
-        min_bid_raw_display = (
-          f"{int(min_bid_raw):,}"
-          if isinstance(min_bid_raw, (int, float))
-          else str(min_bid_raw)
-        )
 
         # Also show in popup for better visibility
         messagebox.showinfo(
           f"Name Info: {name}",
           f"Details shown in 'Name/Auction Details' section below.\n\n"
-          f"Minimum bid:\n"
-          f"{min_bid_display} FBC\n"
-          f"({min_bid_raw_display} Raw)\n"
+          f"Minimum Bid (raw): {min_bid_raw:,}\n"
+          f"Minimum Bid (FBC): {min_bid_fbc:.6f} FBC\n"
+          f"Conversion: {min_bid_raw:,} units. 1,000,000 = {min_bid_fbc:.6f}\n\n"
           f"State: {data.get('state', 'N/A')}",
         )
-        rollout_height = data.get("rolloutHeight")
-        if isinstance(rollout_height, (int, float)) and int(rollout_height) > 0:
-          self.offer_rollout_reminder(name, int(rollout_height))
-        self.offer_add_to_watchlist(name)
       else:
         self.auction_info_text.delete(1.0, tk.END)
         self.auction_info_text.insert(tk.END, f"Error: {result.stderr}")
@@ -6618,8 +6289,6 @@ class FBDManager:
       "custom_datadir": "",
       "custom_dns_port": "",
       "saved_addresses": [],
-      "rollout_reminders": [],
-      "watchlist": [],
     }
 
     try:
@@ -6656,8 +6325,6 @@ class FBDManager:
       "rpc_port": self.rpc_port_var.get(),
       "auto_restart": self.auto_restart_var.get(),
       "restart_delay": self.restart_delay_var.get(),
-      "rollout_reminders": self.rollout_reminders,
-      "watchlist": self.watchlist,
     }
 
     # Add custom settings if they exist
@@ -6713,10 +6380,6 @@ class FBDManager:
     self.rpc_port_var.set(self.config.get("rpc_port", "32869"))
     self.auto_restart_var.set(self.config.get("auto_restart", False))
     self.restart_delay_var.set(self.config.get("restart_delay", "3"))
-    reminders = self.config.get("rollout_reminders", [])
-    self.rollout_reminders = reminders if isinstance(reminders, list) else []
-    watchlist_data = self.config.get("watchlist", [])
-    self.watchlist = watchlist_data if isinstance(watchlist_data, list) else []
 
     # Load custom settings if they exist
     if hasattr(self, "custom_datadir_var"):
@@ -6785,8 +6448,6 @@ class FBDManager:
         "restart_delay": "3",
         "custom_datadir": "",
         "custom_dns_port": "",
-        "rollout_reminders": [],
-        "watchlist": [],
       }
       self.load_saved_settings()
       messagebox.showinfo("Success", "Settings reset to defaults")
@@ -7955,14 +7616,8 @@ class FBDManager:
     else:
       display_message = message
 
-    # Show debug lines in UI when log level is debug/trace.
-    configured_level = (
-      self.loglevel_var.get().lower()
-      if hasattr(self, "loglevel_var") and self.loglevel_var.get()
-      else "info"
-    )
-    show_debug = configured_level in ["debug", "trace"]
-    if level in ["info", "warning", "error"] or (level == "debug" and show_debug):
+    # Update UI only for info and above (skip debug to reduce clutter)
+    if level in ["info", "warning", "error"]:
       self.log_text.insert(tk.END, f"{display_message}\n")
       self.log_text.see(tk.END)
 
@@ -8053,7 +7708,7 @@ class FBDManager:
   def show_help(self):
     """Display help dialog with quick reference"""
     help_text = """
-FBD Node Manager v4.1.0 - Quick Help
+FBD Node Manager v4.0.0 - Quick Help
 
 PLATFORM:
 * Linux-native Python app (runs on native Linux, WSL, or Windows via WSL)
@@ -8393,599 +8048,6 @@ to access config and log files!
       return None
     except Exception:
       return None
-
-  def offer_rollout_reminder(self, name, rollout_height):
-    """Offer rollout reminder options when rolloutHeight is available."""
-    if self.has_rollout_reminder(name, rollout_height):
-      existing = [
-        r for r in self.rollout_reminders
-        if r.get("name") == name
-        and int(r.get("rollout_height", 0)) == int(rollout_height)
-        and not r.get("fired", False)
-      ]
-      reminder_lines = "\n".join(
-        f"  \u2022 {r.get('label', r.get('mode', 'unknown'))}" for r in existing
-      )
-      messagebox.showinfo(
-        "Reminder Already Set",
-        f"Rollout reminders already set for '{name}' (release block {rollout_height:,}):\n\n{reminder_lines}\n\nUse 'Rollout Reminders' to manage them.",
-      )
-      return
-
-    if not messagebox.askyesno(
-      "Rollout Reminder",
-      f"Name '{name}' has rolloutHeight {rollout_height:,}.\n\n"
-      "Would you like a reminder before or when it becomes available?",
-    ):
-      return
-
-    self.show_rollout_reminder_dialog(name, rollout_height)
-
-  def show_rollout_reminder_dialog(self, name, rollout_height):
-    """Prompt for one or more rollout reminder triggers."""
-    dialog = tk.Toplevel(self.root)
-    dialog.title(f"Rollout Reminder: {name}")
-    dialog.geometry("520x250")
-    dialog.resizable(False, False)
-    dialog.transient(self.root)
-    dialog.grab_set()
-
-    current_height = self._get_current_height_silent()
-
-    frame = ttk.Frame(dialog, padding=15)
-    frame.pack(fill="both", expand=True)
-
-    status_text = (
-      f"Release block: {rollout_height:,}\nCurrent block: {current_height:,}"
-      if current_height is not None
-      else f"Release block: {rollout_height:,}\nCurrent block: unavailable"
-    )
-    ttk.Label(frame, text=status_text, justify="left").pack(
-      anchor="w", pady=(0, 10)
-    )
-
-    notify_at_release_var = tk.BooleanVar(value=True)
-    notify_blocks_var = tk.BooleanVar(value=False)
-    notify_hours_var = tk.BooleanVar(value=False)
-    blocks_before_var = tk.StringVar(value="10")
-    hours_before_var = tk.StringVar(value="48")
-
-    ttk.Checkbutton(
-      frame,
-      text="Notify at release block",
-      variable=notify_at_release_var,
-    ).pack(anchor="w", pady=2)
-
-    blocks_row = ttk.Frame(frame)
-    blocks_row.pack(fill="x", pady=2)
-    ttk.Checkbutton(
-      blocks_row,
-      text="Notify blocks before:",
-      variable=notify_blocks_var,
-    ).pack(side="left")
-    ttk.Entry(blocks_row, textvariable=blocks_before_var, width=8).pack(
-      side="left", padx=(8, 4)
-    )
-    ttk.Label(blocks_row, text="blocks").pack(side="left")
-
-    minutes_row = ttk.Frame(frame)
-    minutes_row.pack(fill="x", pady=2)
-    ttk.Checkbutton(
-      minutes_row,
-      text="Notify hours before:",
-      variable=notify_hours_var,
-    ).pack(side="left")
-    ttk.Entry(minutes_row, textvariable=hours_before_var, width=8).pack(
-      side="left", padx=(19, 4)
-    )
-    ttk.Label(minutes_row, text="hours (approx, 30 blocks/hour)").pack(side="left")
-
-    def save_reminders():
-      added = 0
-
-      if not any(
-        [
-          notify_at_release_var.get(),
-          notify_blocks_var.get(),
-          notify_hours_var.get(),
-        ]
-      ):
-        messagebox.showwarning(
-          "No Reminder Selected",
-          "Select at least one rollout reminder option.",
-          parent=dialog,
-        )
-        return
-
-      if notify_at_release_var.get():
-        added += self.add_rollout_reminder(
-          name,
-          rollout_height,
-          rollout_height,
-          "at release block",
-          lead_blocks=0,
-          mode="release",
-        )
-
-      if notify_blocks_var.get():
-        try:
-          blocks_before = int(blocks_before_var.get().strip())
-          if blocks_before <= 0:
-            raise ValueError()
-        except ValueError:
-          messagebox.showwarning(
-            "Invalid Blocks",
-            "Enter a positive whole number for blocks before release.",
-            parent=dialog,
-          )
-          return
-
-        added += self.add_rollout_reminder(
-          name,
-          rollout_height,
-          rollout_height - blocks_before,
-          f"{blocks_before:,} blocks before release",
-          lead_blocks=blocks_before,
-          mode="blocks",
-        )
-
-      if notify_hours_var.get():
-        try:
-          hours_before = int(hours_before_var.get().strip())
-          if hours_before <= 0:
-            raise ValueError()
-        except ValueError:
-          messagebox.showwarning(
-            "Invalid Hours",
-            "Enter a positive whole number for hours before release.",
-            parent=dialog,
-          )
-          return
-
-        lead_blocks = max(1, hours_before * 30)
-        added += self.add_rollout_reminder(
-          name,
-          rollout_height,
-          rollout_height - lead_blocks,
-          f"about {hours_before:,} hours before release (~{lead_blocks:,} blocks)",
-          lead_blocks=lead_blocks,
-          mode="hours",
-        )
-
-      if added > 0:
-        dialog.destroy()
-        messagebox.showinfo(
-          "Rollout Reminder",
-          f"Saved {added} rollout reminder(s) for '{name}'.",
-        )
-      else:
-        messagebox.showinfo(
-          "Rollout Reminder",
-          f"No new reminders were added for '{name}'.",
-          parent=dialog,
-        )
-
-    button_row = ttk.Frame(frame)
-    button_row.pack(fill="x", pady=(15, 0))
-    ttk.Button(button_row, text="Save", command=save_reminders).pack(
-      side="right", padx=(8, 0)
-    )
-    ttk.Button(button_row, text="Cancel", command=dialog.destroy).pack(
-      side="right"
-    )
-
-  def has_rollout_reminder(self, name, rollout_height):
-    """Return True when a pending reminder already exists for this rollout."""
-    rollout_height = int(rollout_height)
-    return any(
-      reminder.get("name") == name
-      and int(reminder.get("rollout_height", 0)) == rollout_height
-      and not reminder.get("fired", False)
-      for reminder in self.rollout_reminders
-    )
-
-  def show_rollout_reminders_manager(self):
-    """Show a small UI for viewing and removing pending rollout reminders."""
-    dialog = tk.Toplevel(self.root)
-    dialog.title("Pending Rollout Reminders")
-    dialog.geometry("760x320")
-    dialog.transient(self.root)
-
-    frame = ttk.Frame(dialog, padding=10)
-    frame.pack(fill="both", expand=True)
-
-    current_height = self._get_current_height_silent()
-    current_text = (
-      f"Current block: {current_height:,}"
-      if current_height is not None
-      else "Current block: unavailable"
-    )
-    ttk.Label(frame, text=current_text).pack(anchor="w", pady=(0, 8))
-
-    columns = ("name", "release", "trigger", "lead")
-    tree = ttk.Treeview(frame, columns=columns, show="headings", height=10)
-    tree.heading("name", text="Name")
-    tree.heading("release", text="Release Block")
-    tree.heading("trigger", text="Trigger Block")
-    tree.heading("lead", text="Reminder")
-    tree.column("name", width=180)
-    tree.column("release", width=110, anchor="center")
-    tree.column("trigger", width=110, anchor="center")
-    tree.column("lead", width=320)
-    tree.pack(fill="both", expand=True)
-
-    empty_label = ttk.Label(frame, text="No pending rollout reminders.")
-
-    def refresh_tree():
-      for item in tree.get_children():
-        tree.delete(item)
-
-      reminders = sorted(
-        [r for r in self.rollout_reminders if not r.get("fired", False)],
-        key=lambda reminder: (
-          int(reminder.get("trigger_block", 0)),
-          str(reminder.get("name", "")),
-        ),
-      )
-
-      if reminders:
-        empty_label.pack_forget()
-        for reminder in reminders:
-          reminder_id = reminder.get("id") or f"row-{len(tree.get_children())}"
-          tree.insert(
-            "",
-            tk.END,
-            iid=reminder_id,
-            values=(
-              reminder.get("name", ""),
-              f"{int(reminder.get('rollout_height', 0)):,}",
-              f"{int(reminder.get('trigger_block', 0)):,}",
-              reminder.get("label", ""),
-            ),
-          )
-      else:
-        empty_label.pack(anchor="w", pady=(8, 0))
-
-    def remove_selected():
-      selected = tree.selection()
-      if not selected:
-        messagebox.showwarning(
-          "No Selection",
-          "Please select at least one rollout reminder to remove.",
-          parent=dialog,
-        )
-        return
-
-      selected_ids = set(selected)
-      before_count = len(self.rollout_reminders)
-      self.rollout_reminders = [
-        reminder
-        for reminder in self.rollout_reminders
-        if reminder.get("id") not in selected_ids
-      ]
-      removed = before_count - len(self.rollout_reminders)
-      if removed > 0:
-        self.save_config()
-        self.log(f"Removed {removed} rollout reminder(s)")
-      refresh_tree()
-
-    button_row = ttk.Frame(frame)
-    button_row.pack(fill="x", pady=(10, 0))
-    ttk.Button(
-      button_row,
-      text="Remove Selected",
-      command=remove_selected,
-    ).pack(side="left")
-    ttk.Button(button_row, text="Refresh", command=refresh_tree).pack(
-      side="left", padx=(8, 0)
-    )
-    ttk.Button(button_row, text="Close", command=dialog.destroy).pack(side="right")
-
-    refresh_tree()
-
-  # ── Watchlist methods ────────────────────────────────────────────────────────
-
-  def is_on_watchlist(self, name):
-    """Return True if name is already on the watchlist."""
-    return any(w.get("name") == name for w in self.watchlist)
-
-  def add_to_watchlist(self, name, notes=""):
-    """Add a name to the watchlist if not already present. Returns True if added."""
-    if self.is_on_watchlist(name):
-      return False
-    entry = {
-      "name": name,
-      "added": datetime.now().isoformat(),
-      "notes": notes,
-      "last_state": None,
-      "notified_states": [],
-    }
-    self.watchlist.append(entry)
-    self.save_config()
-    self.log(f"Added '{name}' to watchlist")
-    return True
-
-  def remove_from_watchlist(self, name):
-    """Remove a name from the watchlist. Returns True if removed."""
-    before = len(self.watchlist)
-    self.watchlist = [w for w in self.watchlist if w.get("name") != name]
-    if len(self.watchlist) < before:
-      self.save_config()
-      return True
-    return False
-
-  def offer_add_to_watchlist(self, name):
-    """Offer to add a name to the watchlist after a name lookup."""
-    if self.is_on_watchlist(name):
-      return
-    if messagebox.askyesno(
-      "Add to Watchlist",
-      f"Add '{name}' to your watchlist?\n\n"
-      "You'll be notified if an auction starts for this name.",
-    ):
-      self.add_to_watchlist(name)
-      messagebox.showinfo("Watchlist", f"'{name}' added to watchlist.")
-
-  def show_watchlist_manager(self):
-    """Show the watchlist manager dialog."""
-    dialog = tk.Toplevel(self.root)
-    dialog.title("Watchlist")
-    dialog.geometry("760x400")
-    dialog.transient(self.root)
-
-    frame = ttk.Frame(dialog, padding=10)
-    frame.pack(fill="both", expand=True)
-
-    # Filter row
-    filter_row = ttk.Frame(frame)
-    filter_row.pack(fill="x", pady=(0, 8))
-    ttk.Label(filter_row, text="Filter:").pack(side="left")
-    search_var = tk.StringVar()
-    ttk.Entry(filter_row, textvariable=search_var, width=30).pack(
-      side="left", padx=(6, 0)
-    )
-
-    columns = ("name", "state", "added", "notes")
-    tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
-    tree.heading("name", text="Name")
-    tree.heading("state", text="State")
-    tree.heading("added", text="Added")
-    tree.heading("notes", text="Notes")
-    tree.column("name", width=180)
-    tree.column("state", width=100, anchor="center")
-    tree.column("added", width=170, anchor="center")
-    tree.column("notes", width=270)
-    tree.pack(fill="both", expand=True)
-
-    empty_label = ttk.Label(frame, text="Watchlist is empty.")
-
-    def refresh_tree(filter_text=""):
-      for item in tree.get_children():
-        tree.delete(item)
-      items = list(self.watchlist)
-      if filter_text:
-        ft = filter_text.lower()
-        items = [w for w in items if ft in w.get("name", "").lower()]
-      items = sorted(items, key=lambda w: w.get("name", ""))
-      if items:
-        empty_label.pack_forget()
-        for entry in items:
-          wname = entry.get("name", "")
-          state = entry.get("last_state") or "\u2014"
-          added_raw = entry.get("added", "")
-          try:
-            added_dt = datetime.fromisoformat(added_raw)
-            added_str = added_dt.strftime("%Y-%m-%d %H:%M")
-          except Exception:
-            added_str = added_raw[:16] if added_raw else "\u2014"
-          notes = entry.get("notes", "")
-          tree.insert(
-            "", tk.END, iid=wname, values=(wname, state, added_str, notes)
-          )
-      else:
-        empty_label.pack(anchor="w", pady=(8, 0))
-
-    search_var.trace_add("write", lambda *_: refresh_tree(search_var.get()))
-
-    def use_name():
-      selected = tree.selection()
-      if not selected:
-        messagebox.showwarning(
-          "No Selection", "Select a name first.", parent=dialog
-        )
-        return
-      self.name_var.set(selected[0])
-      dialog.destroy()
-
-    def open_auction():
-      selected = tree.selection()
-      if not selected:
-        messagebox.showwarning(
-          "No Selection", "Select a name first.", parent=dialog
-        )
-        return
-      self.name_var.set(selected[0])
-      dialog.destroy()
-      self.send_open()
-
-    def remove_selected():
-      selected = tree.selection()
-      if not selected:
-        messagebox.showwarning(
-          "No Selection",
-          "Select at least one name to remove.",
-          parent=dialog,
-        )
-        return
-      for wname in selected:
-        self.remove_from_watchlist(wname)
-      refresh_tree(search_var.get())
-
-    button_row = ttk.Frame(frame)
-    button_row.pack(fill="x", pady=(10, 0))
-    ttk.Button(button_row, text="Use Name", command=use_name).pack(side="left")
-    ttk.Button(button_row, text="Open Auction", command=open_auction).pack(
-      side="left", padx=(8, 0)
-    )
-    ttk.Button(
-      button_row, text="Remove Selected", command=remove_selected
-    ).pack(side="left", padx=(8, 0))
-    ttk.Button(
-      button_row,
-      text="Refresh",
-      command=lambda: refresh_tree(search_var.get()),
-    ).pack(side="left", padx=(8, 0))
-    ttk.Button(button_row, text="Close", command=dialog.destroy).pack(
-      side="right"
-    )
-
-    refresh_tree()
-
-  def _emit_watchlist_auction_alert(self, name, state):
-    """Emit a watchlist auction-start alert on the main thread."""
-    state_label = {
-      "OPENING": "auction is opening (bidding starts soon)",
-      "BIDDING": "auction is open for bidding",
-      "REVEAL": "bidding closed \u2014 reveal phase active",
-    }.get(state, f"state changed to {state}")
-    message = f"Watchlist: '{name}' \u2014 {state_label}."
-    self.log(f"[!] {message}")
-    self.notification_manager.add_notification(
-      "watchlist_alert", name, message, level="info"
-    )
-    messagebox.showinfo("Watchlist Alert", message)
-
-  def add_rollout_reminder(
-    self, name, rollout_height, trigger_block, label, lead_blocks=0, mode="release"
-  ):
-    """Add a rollout reminder if an equivalent reminder does not already exist."""
-    trigger_block = int(trigger_block)
-    rollout_height = int(rollout_height)
-    lead_blocks = int(lead_blocks)
-
-    reminder_id = f"{name}:{rollout_height}:{mode}:{lead_blocks}:{trigger_block}"
-    if any(r.get("id") == reminder_id for r in self.rollout_reminders):
-      return 0
-
-    reminder = {
-      "id": reminder_id,
-      "name": name,
-      "rollout_height": rollout_height,
-      "trigger_block": trigger_block,
-      "label": label,
-      "lead_blocks": lead_blocks,
-      "mode": mode,
-      "created": datetime.now().isoformat(),
-      "fired": False,
-    }
-
-    current_height = self._get_current_height_silent()
-    if current_height is not None and trigger_block <= current_height:
-      self.emit_rollout_reminder(reminder, current_height)
-      return 1
-
-    self.rollout_reminders.append(reminder)
-    self.save_config()
-    self.log(
-      f"Saved rollout reminder for '{name}' at block {trigger_block:,} ({label})"
-    )
-    return 1
-
-  def emit_rollout_reminder(self, reminder, current_height):
-    """Emit a one-time reminder notification for a rollout trigger."""
-    name = reminder.get("name", "")
-    rollout_height = int(reminder.get("rollout_height", 0))
-    trigger_block = int(reminder.get("trigger_block", rollout_height))
-    label = reminder.get("label", "rollout reminder")
-
-    if trigger_block >= rollout_height:
-      message = (
-        f"Name '{name}' is available now at rollout block {rollout_height:,}."
-      )
-    else:
-      message = (
-        f"Name '{name}' release is approaching: {label}. "
-        f"Release block {rollout_height:,}, current block {current_height:,}."
-      )
-
-    self.notification_manager.add_notification(
-      "rollout_reminder",
-      name,
-      message,
-      level="info",
-    )
-    self.log(message)
-    messagebox.showinfo("Rollout Reminder", message)
-
-  def check_rollout_reminders(self):
-    """Fire pending rollout reminders when the current block reaches them."""
-    if not self.rollout_reminders:
-      return
-
-    current_height = self._get_current_height_silent()
-    if current_height is None:
-      return
-
-    changed = False
-    remaining = []
-    for reminder in self.rollout_reminders:
-      trigger_block = int(reminder.get("trigger_block", 0))
-      if reminder.get("fired", False) or current_height < trigger_block:
-        remaining.append(reminder)
-        continue
-
-      reminder["fired"] = True
-      self.emit_rollout_reminder(reminder, current_height)
-      changed = True
-
-    if changed:
-      self.rollout_reminders = [
-        reminder for reminder in remaining if not reminder.get("fired", False)
-      ]
-      self.save_config()
-
-  def check_watchlist_auction_start(self):
-    """Check watchlist names for auction-state changes every ~60 seconds."""
-    if not self.watchlist:
-      return
-    self._watchlist_check_tick += 1
-    if self._watchlist_check_tick < 12:
-      return
-    self._watchlist_check_tick = 0
-    threading.Thread(
-      target=self._check_watchlist_states_thread, daemon=True
-    ).start()
-
-  def _check_watchlist_states_thread(self):
-    """Background: query getnameinfo state for all watchlist names."""
-    ACTIVE_STATES = {"OPENING", "BIDDING", "REVEAL"}
-    changed = False
-    for entry in list(self.watchlist):
-      name = entry.get("name", "")
-      if not name:
-        continue
-      try:
-        result = self.rpc_call("getnameinfo", [name])
-        if not isinstance(result, dict):
-          continue
-        state = result.get("state")
-        if state is None:
-          continue
-        old_state = entry.get("last_state")
-        if state != old_state:
-          entry["last_state"] = state
-          changed = True
-          notified = entry.get("notified_states") or []
-          if state in ACTIVE_STATES and state not in notified:
-            notified = list(notified) + [state]
-            entry["notified_states"] = notified
-            self.root.after(
-              0, self._emit_watchlist_auction_alert, name, state
-            )
-      except Exception:
-        pass
-    if changed:
-      self.save_config()
 
   def get_wallet_info_silent(self, wallet):
     """
@@ -10276,25 +9338,14 @@ to access config and log files!
     Add imported auction to automation jobs
     Extracts bid/lockup amounts from existing bids
     """
-    # Preserve historical bid and lockup using the strongest values from wallet bids.
-    bid_amount = 0.0
-    lockup_amount = 0.0
+    # Get bid amounts from first bid
+    bid_amount = 0
+    lockup_amount = 0
 
     if bids and len(bids) > 0:
-      for bid in bids:
-        value = self._to_float(bid.get("value", 0))
-        lockup = self._to_float(bid.get("lockup", 0))
-
-        # Some RPC shapes report atoms; convert only when value is atom-like.
-        if value > 1000000:
-          value = value / 1000000
-        if lockup > 1000000:
-          lockup = lockup / 1000000
-
-        if value > bid_amount:
-          bid_amount = value
-        if lockup > lockup_amount:
-          lockup_amount = lockup
+      first_bid = bids[0]
+      bid_amount = first_bid.get("value", 0) / 1000000 # Convert from atoms
+      lockup_amount = first_bid.get("lockup", 0) / 1000000 # Convert from atoms
 
     # Create job
     job_id = str(uuid.uuid4())
@@ -10306,22 +9357,11 @@ to access config and log files!
       "name": name,
       "wallet": wallet,
       "bid_amount": bid_amount,
-      "original_bid_amount": bid_amount,
       "lockup_amount": lockup_amount,
       "status": status,
       "auto_enabled": True,
-      "created": datetime.now().isoformat(),
       "created_at": datetime.now().isoformat(),
       "updated_at": datetime.now().isoformat(),
-      "txids": {"open": None, "bid": None, "reveal": [], "register": None},
-      "block_heights": {
-        "opened_at": None,
-        "bid_placed_at": None,
-        "revealed_at": None,
-        "registered_at": None,
-      },
-      "error_log": [],
-      "retry_count": 0,
       "imported": True, # Flag to indicate this was imported
     }
 
@@ -10390,11 +9430,9 @@ to access config and log files!
         "name": name,
         "wallet": wallet,
         "bid_amount": str(bid_amount),
-        "original_bid_amount": str(bid_amount),
         "lockup_amount": str(lockup_amount),
         "status": "pending_open", # pending_open, opened, bid_placed, revealed, registered, lost, failed
         "auto_enabled": auto_enabled,
-        "created": datetime.now().isoformat(),
         "created_at": int(time.time()),
         "txids": {"open": None, "bid": None, "reveal": [], "register": None},
         "block_heights": {
@@ -10443,9 +9481,6 @@ to access config and log files!
       if not job:
         self.log(f"[!] Job not found: {job_id[:8]}...")
         return False
-
-      # Imported/older jobs can miss nested fields used below.
-      self._ensure_job_schema(job)
 
       # Update status
       old_status = job["status"]

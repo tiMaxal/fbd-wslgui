@@ -6843,18 +6843,61 @@ class FBDManager:
 
   def _get_miner_version_string(self, miner_path):
     """Best-effort version string extraction from miner binary"""
+
+    def _extract_version_line(output_text):
+      """Return a stable version/banner line or None."""
+      if not output_text:
+        return None
+
+      lines = [line.strip() for line in output_text.splitlines() if line.strip()]
+      if not lines:
+        return None
+
+      # Prefer an explicit miner/version line and ignore obvious error text.
+      for line in lines:
+        lowered = line.lower()
+        if "missing expected argument --user" in lowered:
+          continue
+        if "fistbump cpu miner" in lowered or " miner v" in lowered:
+          return line[:200]
+        if "version" in lowered and "error" not in lowered:
+          return line[:200]
+
+      return None
+
     try:
       if sys.platform != "win32":
         os.chmod(miner_path, 0o755)
-      result = subprocess.run(
-        [str(miner_path), "--version"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-      )
-      output = (result.stdout or result.stderr or "").strip()
-      if output:
-        return output.splitlines()[0][:200]
+
+      probe_args = [
+        ["--version"],
+        ["version"],
+        ["-V"],
+        ["--help"],
+        ["-h"],
+      ]
+
+      saw_user_argument_error = False
+      for args in probe_args:
+        result = subprocess.run(
+          [str(miner_path), *args],
+          capture_output=True,
+          text=True,
+          timeout=10,
+        )
+        output = "\n".join(
+          part for part in [result.stdout, result.stderr] if part
+        ).strip()
+
+        version_line = _extract_version_line(output)
+        if version_line:
+          return version_line
+
+        if "missing expected argument --user" in output.lower():
+          saw_user_argument_error = True
+
+      if saw_user_argument_error:
+        return "unknown (miner does not expose version via CLI flags)"
     except Exception:
       pass
     return "unknown"
@@ -7169,7 +7212,6 @@ class FBDManager:
         raise RuntimeError("Downloaded check file is empty.")
 
       remote_hash = self._get_file_sha256(temp_path)
-      remote_ver = self._get_miner_version_string(temp_path)
 
       if not miner_path.exists():
         self.log("Local miner not found. Update required.")
@@ -7178,7 +7220,6 @@ class FBDManager:
           lambda: messagebox.showinfo(
             "Miner Version Check",
             "Local miner not found.\n\n"
-            f"Latest version: {remote_ver}\n"
             f"SHA256: {remote_hash[:16]}...\n\n"
             "Use 'Check & Auto-Update Miner' to install.",
           ),
@@ -7186,7 +7227,6 @@ class FBDManager:
         return
 
       local_hash = self._get_file_sha256(miner_path)
-      local_ver = self._get_miner_version_string(miner_path)
 
       if local_hash == remote_hash:
         self.log("Miner version check: already up to date.")
@@ -7194,10 +7234,7 @@ class FBDManager:
           0,
           lambda: messagebox.showinfo(
             "Miner Version Check",
-            "Miner is already up to date.\n\n"
-            f"Local version: {local_ver}\n"
-            f"Latest version: {remote_ver}\n"
-            f"SHA256: {local_hash[:16]}...",
+            "Miner is already up to date.",
           ),
         )
       else:
@@ -7207,8 +7244,8 @@ class FBDManager:
           lambda: messagebox.showinfo(
             "Miner Version Check",
             "Update available for miner.\n\n"
-            f"Local version: {local_ver}\n"
-            f"Latest version: {remote_ver}\n\n"
+            f"Local SHA256: {local_hash[:16]}...\n"
+            f"Latest SHA256: {remote_hash[:16]}...\n\n"
             "Use 'Check & Auto-Update Miner' to apply.",
           ),
         )
