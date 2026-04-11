@@ -1,4 +1,4 @@
-#  FBD Node Manager GUI v3.0.0
+#  FBD Node Manager GUI v0-5-0
 
 > **Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026**
 
@@ -16,15 +16,18 @@ A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, w
 
 ##  Dependencies
 
-**Only 3 packages needed:**
+**Core dependencies:**
 
 - `python3-tk` - GUI framework (tkinter)
 - `python3-requests` - HTTP library for RPC calls
+- `customtkinter` - Optional rounded UI toolkit mode (installed via pip)
 - `libsqlite3-dev` - SQLite database support (for local data storage)
 
 **All other imports are Python standard library** (json, os, datetime, email, pathlib, base64, etc.)
 
-**Auto-installation:** The app will check for missing dependencies on startup and offer to install them automatically using your system's package manager (apt, dnf, yum, or pacman).
+**Auto-installation:** The app offers automatic install for required dependencies on startup. Optional `customtkinter` can be installed on startup or later when you choose the rounded UI toolkit.
+
+**Legacy fallback:** The default Legacy ttk toolkit supports the same Light, Dark, and Same as system theme modes without installing `customtkinter`.
 
 **For detailed installation instructions, see [INSTALL.md](INSTALL.md)**
 
@@ -33,15 +36,26 @@ A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, w
 ```bash
 # Ubuntu/Debian/Xubuntu
 sudo apt update && sudo apt install -y python3-tk python3-requests libsqlite3-dev
+python3 -m pip install customtkinter
 
 # Fedora/RHEL/CentOS
 sudo dnf install -y python3-tkinter python3-requests libsqlite3-devel
+python3 -m pip install customtkinter
 
 # Arch Linux
 sudo pacman -S tk python-requests sqlite3
+python3 -m pip install customtkinter
 ```
 
 **Minimum Python version:** 3.6+
+
+##  Appearance & Theming
+
+- **Theme mode:** `Same as system`, `Dark`, and `Light`
+- **Legacy ttk:** Default toolkit, fully usable without `customtkinter`
+- **Rounded CustomTkinter:** Optional toolkit with rounded controls
+- **Install choice:** If you skip installing `customtkinter` at startup, the app asks again only when you later choose the rounded toolkit in Settings
+- **Dark mode without CustomTkinter:** Fully supported via the Legacy ttk toolkit
 
 ##  Quick Start
 
@@ -81,7 +95,7 @@ Runs the test version (fbd_wslgui.test.py) separately.
 
 ### Core Files
 
-- **fbd_wslgui.py** - Main application (v3.0.0)
+- **fbd_wslgui.py** - Main application (v0-5-0)
 - **fbd_wslgui.test.py** - Test version for development
 - **fbd_wslgui.3-0-0.py** - Archived stable v3.0.0
 
@@ -606,7 +620,8 @@ chmod +x fbd fbdctl
 
 ## Version History
 
-- **v3.0.0** (Current) - Production release with auction automation
+- **v0-5-0** (Current) - Production release with rounded UI toolkit option and dependency auto-install updates
+- **v3.0.0** - Earlier production release with auction automation
 - **v2.0.0** - Enhanced auction features (archived)
 - **v1.0.0** - Initial release (archived)
 

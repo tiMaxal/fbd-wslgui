@@ -52,7 +52,16 @@ The wallet transfer interface should cover both FBC transfers and protocol-level
 
 ## Medium Priority
 
-_Add future enhancements here_
+### Appearance / Theming Follow-Ups
+**Status:** Planned  
+**Created:** April 11, 2026
+
+Current v0-5-0 behavior already supports Light/Dark/System theme modes in Legacy ttk, with optional rounded CustomTkinter install-on-demand.
+
+**Requirements:**
+- [ ] Add a pre-restart preview or clearer summary of selected theme/toolkit changes
+- [ ] Offer additional CustomTkinter accent themes beyond the current stable default
+- [ ] Consider a small status indicator showing whether optional rounded toolkit support is installed
 
 ---
 

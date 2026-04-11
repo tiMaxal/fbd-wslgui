@@ -1,5 +1,5 @@
 ╔══════════════════════════════════════════════════════════════╗
-║              FBD GUI v3.0.0 QUICK START GUIDE                ║
+║              FBD GUI v0-5-0 QUICK START GUIDE                ║
 ║     Created by 'voding' [vibe-coding] - copilot+timaxal     ║
 ║                        April 2026                            ║
 ╚══════════════════════════════════════════════════════════════╝
@@ -20,16 +20,25 @@ Required Python packages:
   • Python 3.6+ (with tkinter)
   • python3-tk (GUI framework)
   • python3-requests (HTTP library)
+  • customtkinter (optional rounded UI toolkit mode)
 
-The app will auto-check and offer to install missing packages!
+The app will auto-check required packages on startup.
+Legacy ttk plus Light/Dark/System themes work without customtkinter.
 
 Manual install (Ubuntu/Debian):
   sudo apt update && sudo apt install -y python3-tk python3-requests
+  # Optional only for rounded toolkit mode:
+  python3 -m pip install customtkinter
+
+APPEARANCE:
+  • Theme mode: Same as system / Dark / Light
+  • Legacy ttk: works without customtkinter
+  • Rounded CustomTkinter: optional, install on startup or later from Settings
 
 CURRENT FILES:
 
 Core Application:
-  • fbd_wslgui.py              - Main GUI (v3.0.0)
+  • fbd_wslgui.py              - Main GUI (v0-5-0)
   • fbd_wslgui.test.py         - Test version
   • fbd_wslgui.3-0-0.py        - Archived stable
 

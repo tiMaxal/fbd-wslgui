@@ -4,6 +4,7 @@
 # SYSTEM PACKAGES (install via apt/dnf/pacman):
 # - python3-tk      : GUI framework (tkinter)
 # - python3-requests: HTTP library for RPC calls
+# - python3-pip      : pip installer (for customtkinter)
 #
 # Ubuntu/Debian:
 #   sudo apt update && sudo apt install -y python3-tk python3-requests
@@ -18,9 +19,10 @@
 # PIP ALTERNATIVE (if system packages unavailable):
 # =====================================
 # Note: tkinter usually can't be pip-installed - use system package manager
-# But requests can be installed via pip if needed:
+# Python package dependencies installed via pip:
 
 requests>=2.25.0
+customtkinter>=5.2.0
 
 # =====================================
 # STANDARD LIBRARY (included with Python 3.6+):

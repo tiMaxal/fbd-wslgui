@@ -11,27 +11,34 @@ This is a **Linux-native Python application** that runs directly on any Linux di
 
 ### Step 1: Install Python Dependencies
 
-The app requires only **2 external packages**:
+The app requires **2 base runtime Python packages** plus sqlite dev tools.
+`customtkinter` is optional and only needed for the rounded toolkit mode:
 
 #### Ubuntu / Debian / Mint / Xubuntu:
 ```bash
 sudo apt update
 sudo apt install -y python3-tk python3-requests libsqlite3-dev
+python3 -m pip install customtkinter
 ```
+
+If you prefer the default Legacy ttk toolkit, you can skip the `customtkinter` install and still use Light, Dark, and Same as system theme modes.
 
 #### Fedora / RHEL / CentOS:
 ```bash
 sudo dnf install -y python3-tkinter python3-requests libsqlite3-dev
+python3 -m pip install customtkinter
 ```
 
 #### Arch Linux / Manjaro:
 ```bash
 sudo pacman -S tk python-requests sqlite3
+python3 -m pip install customtkinter
 ```
 
 #### OpenSUSE:
 ```bash
 sudo zypper install python3-tk python3-requests sqlite3-devel
+python3 -m pip install customtkinter
 ```
 
 ### Step 2: Download FBD Binaries
@@ -76,7 +83,8 @@ python3 fbd_wslgui.py
 
 The app will:
 - ✅ Auto-check for missing dependencies
-- ✅ Offer to install missing packages (with sudo)
+- ✅ Offer to install required packages (with sudo)
+- ✅ Offer optional `customtkinter` install without blocking Legacy ttk mode
 - ✅ Launch the GUI if all dependencies are satisfied
 
 ---
@@ -102,6 +110,7 @@ sudo apt update
 
 # Install Python and dependencies
 sudo apt install -y python3 python3-tk python3-requests
+python3 -m pip install customtkinter
 
 # Download FBD binaries
 wget https://fbd.dev/download/fbd-latest-linux-x86_64.zip
@@ -170,6 +179,16 @@ sudo apt install python3-requests
 pip3 install requests
 ```
 
+### "No module named 'customtkinter'" Error
+
+```bash
+python3 -m pip install customtkinter
+```
+
+If you plan to use only legacy ttk mode, the app can still start, but install this package to enable rounded UI toolkit mode.
+
+Dark mode remains available in Legacy ttk mode even when `customtkinter` is not installed.
+
 ### Display Issues (WSL/X11)
 
 If the GUI doesn't appear on Windows via WSL:
@@ -186,9 +205,12 @@ If the GUI doesn't appear on Windows via WSL:
 
 ## 📋 Dependency Overview
 
-### Required (must install):
+### Required for base app:
 - `python3-tk` - GUI framework
 - `python3-requests` - HTTP library for RPC
+
+### Optional:
+- `customtkinter` - Rounded UI toolkit mode
 
 ### Included with Python (no installation needed):
 - `json`, `os`, `sys`, `pathlib`

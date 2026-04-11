@@ -15,123 +15,449 @@ import os
 import sys
 import subprocess
 import signal
+import json
+import importlib
+import shlex
+import shutil
+import site
+
+
+def _optional_customtkinter_prompt_config_path():
+  """Return the config path used to persist startup prompt state."""
+  return os.path.expanduser("~/.fbdgui/fbdgui_config.json")
+
+
+def _optional_customtkinter_prompt_seen():
+  """Return True when the startup CustomTkinter prompt was already shown."""
+  config_path = _optional_customtkinter_prompt_config_path()
+  try:
+    if not os.path.exists(config_path):
+      return False
+    with open(config_path, "r", encoding="utf-8") as handle:
+      config = json.load(handle)
+    return bool(config.get("customtkinter_startup_prompt_seen", False))
+  except Exception:
+    return False
+
+
+def _mark_optional_customtkinter_prompt_seen():
+  """Persist that the startup CustomTkinter prompt has already been shown."""
+  config_path = _optional_customtkinter_prompt_config_path()
+  config_dir = os.path.dirname(config_path)
+  try:
+    os.makedirs(config_dir, exist_ok=True)
+    config = {}
+    if os.path.exists(config_path):
+      with open(config_path, "r", encoding="utf-8") as handle:
+        loaded_config = json.load(handle)
+      if isinstance(loaded_config, dict):
+        config = loaded_config
+    config["customtkinter_startup_prompt_seen"] = True
+    with open(config_path, "w", encoding="utf-8") as handle:
+      json.dump(config, handle, indent=2)
+  except Exception:
+    pass
+
+
+def _is_wsl_environment():
+  """Return True when running inside Windows Subsystem for Linux."""
+  if not sys.platform.startswith("linux"):
+    return False
+
+  try:
+    with open("/proc/sys/kernel/osrelease", "r", encoding="utf-8") as handle:
+      release = handle.read().lower()
+  except OSError:
+    release = ""
+
+  return "microsoft" in release or "wsl" in release
+
+
+def _python_runtime_label():
+  """Return a short human-readable description of the active Python runtime."""
+  if _is_wsl_environment():
+    return "WSL Python"
+  if sys.platform.startswith("linux"):
+    return "native Linux Python"
+  if sys.platform == "win32":
+    return "Windows Python"
+  return sys.platform
+
+
+def _has_root_privileges():
+  """Return True when the current process already has root privileges."""
+  geteuid = getattr(os, "geteuid", None)
+  return bool(geteuid is not None and geteuid() == 0)
+
+
+def _can_use_interactive_sudo():
+  """Return True when sudo can prompt on a real terminal."""
+  return bool(
+    sys.platform.startswith("linux")
+    and shutil.which("sudo")
+    and sys.stdin.isatty()
+    and sys.stdout.isatty()
+  )
+
+
+def _format_shell_command(command):
+  """Format a subprocess argument list as a shell-ready command string."""
+  return shlex.join(command)
+
+
+def _refresh_python_import_paths(package_name=None):
+  """Refresh import caches and add common site-packages paths to sys.path."""
+  candidate_paths = []
+
+  try:
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+      candidate_paths.append(user_site)
+    else:
+      candidate_paths.extend(user_site)
+  except Exception:
+    pass
+
+  try:
+    candidate_paths.extend(site.getsitepackages())
+  except Exception:
+    pass
+
+  for path in candidate_paths:
+    if path and os.path.isdir(path) and path not in sys.path:
+      sys.path.append(path)
+
+  if package_name:
+    try:
+      show_result = subprocess.run(
+        [sys.executable, "-m", "pip", "show", package_name],
+        capture_output=True,
+        text=True,
+      )
+      if show_result.returncode == 0:
+        for line in show_result.stdout.splitlines():
+          if line.startswith("Location:"):
+            location = line.split(":", 1)[1].strip()
+            if location and os.path.isdir(location) and location not in sys.path:
+              sys.path.append(location)
+            break
+    except Exception:
+      pass
+
+  importlib.invalidate_caches()
+
+
+def _get_optional_python_install_guidance(packages):
+  """Return manual install guidance for optional Python packages."""
+  package_list = " ".join(packages)
+  guidance_lines = [
+    f"Runtime detected: {_python_runtime_label()}",
+    f"Try user install first: {_format_shell_command([sys.executable, '-m', 'pip', 'install', '--user', *packages])}",
+    (
+      "If pip reports an externally-managed environment, retry with: "
+      f"{_format_shell_command([sys.executable, '-m', 'pip', 'install', '--user', '--break-system-packages', *packages])}"
+    ),
+  ]
+
+  if sys.platform.startswith("linux"):
+    guidance_lines.append(
+      "If the selected Python is system-managed and user install still fails, try: "
+      f"{_format_shell_command(['sudo', '-E', sys.executable, '-m', 'pip', 'install', *packages])}"
+    )
+    if _is_wsl_environment():
+      guidance_lines.append(
+        "When running under WSL, run the command inside the Linux distro terminal. "
+        "Windows PowerShell sudo does not apply to the Linux Python environment."
+      )
+
+  if sys.platform == "win32":
+    guidance_lines.append(
+      "Windows Python does not use sudo; run pip from the selected environment or an elevated PowerShell if needed."
+    )
+
+  return "\n".join(guidance_lines)
+
+
+def _install_optional_python_packages(packages):
+  """Install optional Python packages with Linux/WSL-aware fallbacks."""
+  pip_base = [sys.executable, "-m", "pip", "install"]
+  in_virtualenv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+  attempts = []
+
+  if in_virtualenv:
+    attempts.append(("virtualenv pip", [*pip_base, *packages], False))
+  else:
+    attempts.extend(
+      [
+        ("pip --user", [*pip_base, "--user", *packages], False),
+        (
+          "pip --user --break-system-packages",
+          [*pip_base, "--user", "--break-system-packages", *packages],
+          False,
+        ),
+        ("pip install", [*pip_base, *packages], False),
+        (
+          "pip install --break-system-packages",
+          [*pip_base, "--break-system-packages", *packages],
+          False,
+        ),
+      ]
+    )
+
+  if sys.platform.startswith("linux") and not _has_root_privileges() and shutil.which("sudo"):
+    attempts.extend(
+      [
+        (
+          "sudo pip install",
+          ["sudo", "-E", sys.executable, "-m", "pip", "install", *packages],
+          True,
+        ),
+        (
+          "sudo pip install --break-system-packages",
+          [
+            "sudo",
+            "-E",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--break-system-packages",
+            *packages,
+          ],
+          True,
+        ),
+      ]
+    )
+
+  seen_commands = set()
+  failure_notes = []
+
+  for label, command, requires_terminal in attempts:
+    command_key = tuple(command)
+    if command_key in seen_commands:
+      continue
+    seen_commands.add(command_key)
+
+    if requires_terminal and not _can_use_interactive_sudo():
+      failure_notes.append(
+        f"{label}: skipped because no interactive Linux terminal is available for sudo."
+      )
+      continue
+
+    try:
+      if requires_terminal:
+        result = subprocess.run(command, text=True)
+        details = f"command exited with status {result.returncode}"
+      else:
+        result = subprocess.run(command, capture_output=True, text=True)
+        details = result.stderr.strip() or result.stdout.strip() or (
+          f"command exited with status {result.returncode}"
+        )
+    except Exception as exc:
+      failure_notes.append(f"{label}: {exc}")
+      continue
+
+    if result.returncode == 0:
+      _refresh_python_import_paths(packages[0] if packages else None)
+      return True, f"Installed via {label}: {_format_shell_command(command)}"
+
+    failure_notes.append(f"{label}: {details}")
+
+  return False, "\n".join(failure_notes[-6:])
 
 
 def check_and_install_dependencies():
-  """Check for required Python packages and offer to install if missing"""
-  missing_packages = []
-  install_commands = {}
+  """Install required dependencies and optionally offer CustomTkinter."""
+  required_missing_packages = []
+  optional_missing_packages = []
+  system_packages = {}
+  optional_pip_packages = []
 
   # Check for tkinter
   try:
     import tkinter
   except ImportError:
-    missing_packages.append("tkinter")
-    install_commands["tkinter"] = "python3-tk"
+    required_missing_packages.append("tkinter")
+    system_packages["tkinter"] = "python3-tk"
 
   # Check for requests
   try:
     import requests
   except ImportError:
-    missing_packages.append("requests")
-    install_commands["requests"] = "python3-requests"
+    required_missing_packages.append("requests")
+    system_packages["requests"] = "python3-requests"
 
-  if not missing_packages:
+  # Check for customtkinter (optional: only needed for rounded UI toolkit mode)
+  try:
+    import customtkinter
+  except ImportError:
+    optional_missing_packages.append("customtkinter")
+    optional_pip_packages.append("customtkinter")
+
+  if not required_missing_packages and not optional_missing_packages:
     return True # All dependencies satisfied
 
   # Determine package manager
   pkg_manager = None
-  install_cmd_template = None
 
   if os.path.exists("/usr/bin/apt") or os.path.exists("/usr/bin/apt-get"):
     pkg_manager = "apt"
-    install_cmd_template = "sudo apt update && sudo apt install -y {packages}"
   elif os.path.exists("/usr/bin/dnf"):
     pkg_manager = "dnf"
-    install_cmd_template = "sudo dnf install -y {packages}"
   elif os.path.exists("/usr/bin/yum"):
     pkg_manager = "yum"
-    install_cmd_template = "sudo yum install -y {packages}"
   elif os.path.exists("/usr/bin/pacman"):
     pkg_manager = "pacman"
     # Pacman package names might differ
-    install_commands["tkinter"] = "tk"
-    install_commands["requests"] = "python-requests"
-    install_cmd_template = "sudo pacman -S --noconfirm {packages}"
+    if "tkinter" in system_packages:
+      system_packages["tkinter"] = "tk"
+    if "requests" in system_packages:
+      system_packages["requests"] = "python-requests"
 
-  # Build package list
-  if pkg_manager in ["apt", "dnf", "yum"]:
-    packages_to_install = " ".join(install_commands.values())
-  else:
-    packages_to_install = " ".join(install_commands.values())
+  system_package_list = list(system_packages.values())
 
-  # Display error and offer to install
-  print("\n" + "=" * 70)
-  print("[!] MISSING DEPENDENCIES")
-  print("=" * 70)
-  print(f"\nThe following Python packages are required but not installed:")
-  for pkg in missing_packages:
-    print(f" * {pkg}")
+  if required_missing_packages:
+    print("\n" + "=" * 70)
+    print("[!] MISSING REQUIRED DEPENDENCIES")
+    print("=" * 70)
+    print("\nThe following packages are required for the base app:")
+    for pkg in required_missing_packages:
+      print(f" * {pkg}")
 
-  if pkg_manager:
-    install_cmd = install_cmd_template.format(packages=packages_to_install)
-    print(f"\n[*][|] Detected package manager: {pkg_manager}")
-    print(f"\n[*][SECT] Install command:\n  {install_cmd}")
+    if system_package_list and pkg_manager:
+      print(f"\n[*][|] Detected package manager: {pkg_manager}")
+      if pkg_manager == "apt":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo apt update && sudo apt install -y {' '.join(system_package_list)}"
+        )
+      elif pkg_manager == "dnf":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo dnf install -y {' '.join(system_package_list)}"
+        )
+      elif pkg_manager == "yum":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo yum install -y {' '.join(system_package_list)}"
+        )
+      elif pkg_manager == "pacman":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo pacman -S --noconfirm {' '.join(system_package_list)}"
+        )
+    else:
+      print("\n[!] Could not detect package manager for required system packages.")
+      print("Please install them manually and restart the application.")
+      print("=" * 70 + "\n")
+      sys.exit(1)
 
-    # Ask if user wants to auto-install
     try:
       response = (
-        input("\nWould you like to install these packages now? [Y/n]: ")
+        input("\nInstall required dependencies now? [Y/n]: ")
         .strip()
         .lower()
       )
-      if response in ["", "y", "yes"]:
-        print(f"\n[*] Installing packages with {pkg_manager}...")
-        if pkg_manager == "apt":
-          # Run apt update first
-          result = subprocess.run(
-            ["sudo", "apt", "update"], capture_output=True, text=True
-          )
-          if result.returncode != 0:
-            print(f"[!] apt update failed: {result.stderr}")
-
-        # Install packages
-        result = subprocess.run(
-          install_cmd.split(), capture_output=True, text=True
-        )
-
-        if result.returncode == 0:
-          print("[OK] Installation successful!")
-          print("\n[*] Please restart the application:")
-          print("  python3 fbd_wslgui.py")
-          print("=" * 70 + "\n")
-          sys.exit(0)
-        else:
-          print(f"\n[X] Installation failed!")
-          print(f"Error: {result.stderr}")
-
     except KeyboardInterrupt:
       print("\n\n[!] Installation cancelled by user.")
-  else:
-    print("\n[!] Could not detect package manager.")
-    print("Please install the required packages manually.")
+      sys.exit(1)
 
-  # Manual installation instructions
-  print("\n" + "=" * 70)
-  print("[*]< MANUAL INSTALLATION INSTRUCTIONS")
-  print("=" * 70)
-  print("\nUbuntu / Debian:")
-  print("  sudo apt update && sudo apt install -y python3-tk python3-requests")
-  print("\nFedora / RHEL / CentOS:")
-  print("  sudo dnf install -y python3-tkinter python3-requests")
-  print("\nArch Linux:")
-  print("  sudo pacman -S tk python-requests")
-  print("\nOther distributions:")
-  print("  pip3 install requests")
-  print("  (tkinter package name varies - search for python3-tk or python-tkinter)")
-  print("=" * 70 + "\n")
+    if response not in ["", "y", "yes"]:
+      print("\n[!] Required packages were not installed.")
+      print("Please install them manually and restart the application.")
+      print("=" * 70 + "\n")
+      sys.exit(1)
 
-  sys.exit(1)
+    print(f"\n[*] Installing required system packages with {pkg_manager}...")
+    if pkg_manager == "apt":
+      result = subprocess.run(
+        ["sudo", "apt", "update"], capture_output=True, text=True
+      )
+      if result.returncode != 0:
+        print(f"[!] apt update failed: {result.stderr}")
+
+      result = subprocess.run(
+        ["sudo", "apt", "install", "-y", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+    elif pkg_manager == "dnf":
+      result = subprocess.run(
+        ["sudo", "dnf", "install", "-y", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+    elif pkg_manager == "yum":
+      result = subprocess.run(
+        ["sudo", "yum", "install", "-y", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+    else:
+      result = subprocess.run(
+        ["sudo", "pacman", "-S", "--noconfirm", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+
+    if result.returncode != 0:
+      print("\n[X] System package installation failed!")
+      print(f"Error: {result.stderr}")
+      sys.exit(1)
+
+    try:
+      import tkinter # noqa: F401
+      import requests # noqa: F401
+      print("[OK] Required dependencies installed successfully.")
+    except Exception as e:
+      print("\n[X] Required dependency validation failed!")
+      print(f"Error: {e}")
+      sys.exit(1)
+
+  if optional_missing_packages and not _optional_customtkinter_prompt_seen():
+    print("\n" + "=" * 70)
+    print("[i] OPTIONAL ROUNDED UI DEPENDENCY")
+    print("=" * 70)
+    print("\nCustomTkinter is optional and only needed for the rounded toolkit.")
+    print("Legacy ttk mode, including Light/Dark/System themes, works without it.")
+    print("\n[*][SECT] Optional Python package guidance:")
+    print(_get_optional_python_install_guidance(optional_pip_packages))
+
+    try:
+      response = (
+        input("\nInstall optional rounded UI dependency now? [y/N]: ")
+        .strip()
+        .lower()
+      )
+    except KeyboardInterrupt:
+      response = "n"
+      print("\n\n[i] Optional dependency installation skipped.")
+
+    _mark_optional_customtkinter_prompt_seen()
+
+    if response in ["y", "yes"]:
+      print(
+        "\n[*] Installing optional Python package with Linux/WSL-aware pip fallbacks..."
+      )
+      success, details = _install_optional_python_packages(optional_pip_packages)
+      if success:
+        try:
+          _refresh_python_import_paths("customtkinter")
+          import customtkinter # noqa: F401
+          print("[OK] Optional CustomTkinter dependency installed.")
+        except Exception as e:
+          print("\n[!] CustomTkinter installed but import validation failed.")
+          print(f"Error: {e}")
+          print("Continuing with Legacy ttk mode.")
+      else:
+        print("\n[!] Optional dependency installation failed.")
+        print(f"Error: {details}")
+        print(_get_optional_python_install_guidance(optional_pip_packages))
+        print("Continuing with Legacy ttk mode.")
+    else:
+      print("\n[i] Continuing with Legacy ttk mode.")
+
+  return True
 
 
 # Run dependency check before imports
@@ -174,7 +500,7 @@ def get_process_exit_hint(exit_code):
 import json
 import threading
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+from tkinter import ttk, scrolledtext, messagebox, filedialog, simpledialog
 from pathlib import Path
 import hashlib
 import zipfile
@@ -189,6 +515,46 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import shutil # For chain data deletion
 
+try:
+  import customtkinter as ctk
+except ImportError:
+  ctk = None
+
+UI_TOOLKIT_ENV_VAR = "FBD_WSLGUI_UI_TOOLKIT"
+UI_TOOLKIT_TTK = "ttk"
+UI_TOOLKIT_CUSTOMTK = "customtkinter"
+SUPPORTED_UI_TOOLKITS = {UI_TOOLKIT_TTK, UI_TOOLKIT_CUSTOMTK}
+
+
+def _normalize_ui_toolkit(value):
+  """Normalize UI toolkit flag values to supported identifiers."""
+  mode = (value or "").strip().lower()
+  if mode in ("ctk", "customtk", "customtkinter"):
+    return UI_TOOLKIT_CUSTOMTK
+  if mode in ("ttk", "tk", "legacy"):
+    return UI_TOOLKIT_TTK
+  return ""
+
+
+def _resolve_startup_ui_toolkit():
+  """Resolve requested toolkit from env var first, then config file."""
+  env_mode = _normalize_ui_toolkit(os.environ.get(UI_TOOLKIT_ENV_VAR, ""))
+  if env_mode:
+    return env_mode
+
+  config_path = Path.home() / ".fbdgui" / "fbdgui_config.json"
+  try:
+    if config_path.exists():
+      with open(config_path, "r") as handle:
+        cfg = json.load(handle)
+      cfg_mode = _normalize_ui_toolkit(cfg.get("ui_toolkit", ""))
+      if cfg_mode:
+        return cfg_mode
+  except Exception:
+    pass
+
+  return UI_TOOLKIT_TTK
+
 # ============================================================================
 # AUCTION AUTOMATION - STAGE 4: NOTIFICATION MANAGER
 # ============================================================================
@@ -201,7 +567,7 @@ class NotificationManager:
   """
 
   def __init__(self, manager):
-    """Initialize the instance state."""
+    """Initialize notification storage, persistence, and UI hooks."""
     self.manager = manager
     self.notifications = [] # List of notification dicts
     self.max_notifications = 100 # Keep last 100 notifications
@@ -300,7 +666,7 @@ class NotificationManager:
 
     try:
       # Clear current content
-      self.notification_widget.config(state="normal")
+      self.notification_widget.configure(state="normal")
       self.notification_widget.delete("1.0", tk.END)
 
       # Show recent notifications (last 20, newest first)
@@ -346,7 +712,7 @@ class NotificationManager:
               "warning", foreground="orange"
             )
 
-      self.notification_widget.config(state="disabled")
+      self.notification_widget.configure(state="disabled")
       self.notification_widget.see("1.0") # Scroll to top (newest)
 
     except Exception as e:
@@ -457,7 +823,7 @@ class EmailManager:
   """
 
   def __init__(self, manager):
-    """Initialize the instance state."""
+    """Load email configuration and prepare persistence paths."""
     self.manager = manager
     self.config_file = Path.home() / ".fbdgui" / "email_config.json"
     self.config = self._load_config()
@@ -703,7 +1069,7 @@ class AuctionMonitor:
   """
 
   def __init__(self, manager):
-    """Initialize the instance state."""
+    """Prepare background monitoring state for auction automation."""
     self.manager = manager
     self.running = False
     self.thread = None
@@ -766,7 +1132,7 @@ class AuctionMonitor:
     active_jobs = [
       job
       for job in jobs_data["jobs"]
-      if job.get("auto_enabled", False)
+      if (job.get("auto_enabled", False) or job.get("auto_bid_enabled", False))
       and job.get("status") not in ["registered", "lost", "failed"]
     ]
     self.manager.log(
@@ -776,7 +1142,7 @@ class AuctionMonitor:
 
     for job in jobs_data["jobs"]:
       # Skip if automation disabled
-      if not job.get("auto_enabled", False):
+      if not (job.get("auto_enabled", False) or job.get("auto_bid_enabled", False)):
         continue
 
       # Skip terminal states
@@ -824,15 +1190,18 @@ class AuctionMonitor:
 
     # Stage 3: Automatic phase transitions
     # State machine logic
-    if job["status"] == "opened" and state == "BIDDING":
+    auto_bid_enabled = job.get("auto_bid_enabled", job.get("auto_enabled", False))
+    auto_enabled = job.get("auto_enabled", False)
+
+    if job["status"] == "opened" and state == "BIDDING" and auto_bid_enabled:
       # Time to place bid
       self._execute_bid(job)
 
-    elif job["status"] == "bid_placed" and state == "REVEAL":
+    elif job["status"] == "bid_placed" and state == "REVEAL" and auto_enabled:
       # Time to reveal
       self._execute_reveal(job)
 
-    elif job["status"] == "revealed" and state == "CLOSED":
+    elif job["status"] == "revealed" and state == "CLOSED" and auto_enabled:
       # Check if we won, then register
       if self._did_we_win(job, name_info):
         self._execute_register(job)
@@ -1206,8 +1575,10 @@ class AuctionMonitor:
 class FBDManager:
   """Main FBDManager class."""
   def __init__(self, root):
-    """Initialize the instance state."""
+    """Initialize application state, managers, configuration, and UI."""
     self.root = root
+    self.ui_toolkit_mode = _normalize_ui_toolkit(getattr(root, "_ui_toolkit_mode", "")) or UI_TOOLKIT_TTK
+    self.customtkinter_active = self.ui_toolkit_mode == UI_TOOLKIT_CUSTOMTK and ctk is not None
     self.root.title("FBD Node Manager")
     self.root.geometry("1125x875") # 25% larger (was 900x700)
 
@@ -1224,9 +1595,20 @@ class FBDManager:
     }
     self.theme_mode_var = tk.StringVar(value="system")
     self.theme_choice_var = tk.StringVar(value=self.theme_mode_labels["system"])
+    self.ui_toolkit_labels = {
+      UI_TOOLKIT_TTK: "Legacy ttk (current)",
+      UI_TOOLKIT_CUSTOMTK: "Rounded CustomTkinter",
+    }
+    self.ui_toolkit_label_to_mode = {
+      label: mode for mode, label in self.ui_toolkit_labels.items()
+    }
+    self.ui_toolkit_var = tk.StringVar(value=self.ui_toolkit_mode)
+    self.ui_toolkit_choice_var = tk.StringVar(
+      value=self.ui_toolkit_labels.get(self.ui_toolkit_mode, self.ui_toolkit_labels[UI_TOOLKIT_TTK])
+    )
 
     # Setup log file
-    self.log_file = Path.home() / ".fbdgui" / "fbdgui_test.log"
+    self.log_file = Path.home() / ".fbdgui" / "fbdgui.log"
     self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Auction automation - Stage 0: Foundation
@@ -1271,6 +1653,13 @@ class FBDManager:
     self.rollout_reminders = []
     self.watchlist = []
     self._watchlist_check_tick = 0
+    self._ctk_scrollable_frames = []
+    self._ctk_section_outers = []
+    self._ctk_section_bodies = []
+    self._ctk_section_titles = []
+    self._ctk_entries = []
+    self._ctk_buttons = []
+    self._ctk_textboxes = []
 
     # Create UI
     self.create_notebook()
@@ -1294,7 +1683,7 @@ class FBDManager:
 
     # Log startup message with diagnostic info
     self.log("=" * 60)
-    self.log("FBD Node Manager GUI v4.1.0 Started")
+    self.log("FBD Node Manager GUI v0-5-0 Started")
     self.log(f"[*][!] Log file: {self.log_file}")
     self.log(f"[*][!] Log directory: {self.log_file.parent}")
     self.log("=" * 60)
@@ -1360,9 +1749,9 @@ class FBDManager:
     return cmd, fbdctl_path
 
   def create_menu(self):
-    """Create menu bar"""
+    """Create the top-level application menu bar."""
     menubar = tk.Menu(self.root)
-    self.root.config(menu=menubar)
+    self.root.configure(menu=menubar)
 
     # File menu
     file_menu = tk.Menu(menubar, tearoff=0)
@@ -1418,8 +1807,12 @@ class FBDManager:
     exit_btn.pack(side="left")
 
   def create_notebook(self):
-    """Create tabbed interface"""
-    self.notebook = ttk.Notebook(self.root)
+    """Create the main tabbed interface for the application."""
+    if self.customtkinter_active:
+      self.notebook = ctk.CTkTabview(self.root)
+    else:
+      self.notebook = ttk.Notebook(self.root)
+    self._tab_names = []
     self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
 
     # Create tabs
@@ -1429,11 +1822,249 @@ class FBDManager:
     self.create_block_calc_tab()
     self.create_settings_tab()
 
+    # Track tab switches so we can warn about unsaved settings changes.
+    self._active_tab_name = self._get_current_tab_name()
+    if self.customtkinter_active:
+      try:
+        self.notebook.configure(command=self._on_ctk_tab_changed)
+      except Exception:
+        pass
+    else:
+      self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
+
+  def _add_notebook_tab(self, name):
+    """Add a tab and return its container frame (works for both ttk and CTK)."""
+    if self.customtkinter_active:
+      self.notebook.add(name)
+      self._tab_names.append(name)
+      return self.notebook.tab(name)
+    frame = ttk.Frame(self.notebook)
+    self.notebook.add(frame, text=name)
+    self._tab_names.append(name)
+    return frame
+
+  def _notebook_select(self, tab_or_index):
+    """Select a tab â€” handles both ttk.Notebook and ctk.CTkTabview APIs."""
+    if self.customtkinter_active:
+      if isinstance(tab_or_index, int):
+        if 0 <= tab_or_index < len(self._tab_names):
+          self.notebook.set(self._tab_names[tab_or_index])
+      elif isinstance(tab_or_index, str):
+        self.notebook.set(tab_or_index)
+    else:
+      self.notebook.select(tab_or_index)
+
+  def _get_current_tab_name(self):
+    """Return the currently selected tab name for ttk and CTK notebooks."""
+    try:
+      if self.customtkinter_active:
+        return self.notebook.get()
+      selected = self.notebook.select()
+      return self.notebook.tab(selected, "text")
+    except Exception:
+      return ""
+
+  def _collect_non_email_settings_state(self):
+    """Snapshot settings-tab values that should trigger save reminders."""
+
+    def _get_var(name, default=""):
+      var = getattr(self, name, None)
+      if var is None:
+        return default
+      try:
+        return var.get()
+      except Exception:
+        return default
+
+    return {
+      "profile": _get_var("profile_var", "default"),
+      "theme_mode": _get_var("theme_mode_var", "system"),
+      "ui_toolkit": _get_var("ui_toolkit_var", UI_TOOLKIT_TTK),
+      "fbd_path": _get_var("fbd_path_var", "./fbd"),
+      "rpc_host": _get_var("rpc_host_var", "127.0.0.1"),
+      "rpc_port": _get_var("rpc_port_var", "32869"),
+      "custom_datadir": _get_var("custom_datadir_var", ""),
+      "custom_dns_port": _get_var("custom_dns_port_var", ""),
+      "miner_download_url": _get_var("miner_download_url_var", ""),
+      "fbd_download_url": _get_var("fbd_download_url_var", ""),
+      "auto_restart": bool(_get_var("auto_restart_var", False)),
+      "restart_delay": _get_var("restart_delay_var", "3"),
+    }
+
+  def _update_settings_saved_snapshot(self):
+    """Record the latest saved settings snapshot for leave-tab reminders."""
+    self._settings_saved_snapshot = self._collect_non_email_settings_state()
+
+  def _settings_have_unsaved_non_email_changes(self):
+    """Check whether settings-tab values changed since last save/load/reset."""
+    current = self._collect_non_email_settings_state()
+    previous = getattr(self, "_settings_saved_snapshot", current)
+    return current != previous
+
+  def _prompt_save_settings_on_leave(self):
+    """Offer saving when leaving Settings tab with unsaved non-email changes."""
+    if not self._settings_have_unsaved_non_email_changes():
+      return
+
+    save_now = messagebox.askyesno(
+      "Unsaved Settings",
+      "You changed settings in this tab.\n\nSave settings now?",
+    )
+    if save_now:
+      self.save_settings()
+
+  def _on_notebook_tab_changed(self, _event=None):
+    """Handle tab changes and warn about unsaved settings when leaving Settings."""
+    new_tab = self._get_current_tab_name()
+    old_tab = getattr(self, "_active_tab_name", "")
+    if old_tab == "Settings" and new_tab != "Settings":
+      self._prompt_save_settings_on_leave()
+    self._active_tab_name = new_tab
+
+  def _on_ctk_tab_changed(self, _tab_name=None):
+    """Bridge CTK tab-change callback into shared change handler."""
+    self._on_notebook_tab_changed()
+
+  def _create_scrollable_frame(self, parent):
+    """Create scrollable content frame."""
+    if self.customtkinter_active:
+      mode = self._get_effective_theme_mode()
+      bg = "#000000" if mode == "dark" else "#ececec"
+      frame = ctk.CTkFrame(parent, corner_radius=0, fg_color=bg)
+      self._ctk_scrollable_frames.append(frame)
+      return frame
+    return ttk.Frame(parent)
+
+  def _create_section_frame(self, parent, text, padding=10):
+    """Create a section with visible title and rounded border in CTK mode."""
+    if self.customtkinter_active:
+      mode = self._get_effective_theme_mode()
+      is_dark = mode == "dark"
+      section_bg = "#000000" if is_dark else "#ececec"
+      border = "#4a4a4a" if is_dark else "#c3c3c3"
+      title_fg = "#f2f2f2" if is_dark else "#111111"
+
+      outer = ctk.CTkFrame(
+        parent,
+        corner_radius=12,
+        fg_color=section_bg,
+        border_width=1,
+        border_color=border,
+      )
+      title = ctk.CTkLabel(
+        outer,
+        text=text,
+        font=ctk.CTkFont(family="Arial", size=10, weight="bold", underline=True),
+        anchor="w",
+        text_color=title_fg,
+      )
+      title.pack(fill="x", padx=padding, pady=(6, 0))
+
+      body = ctk.CTkFrame(outer, corner_radius=0, fg_color=section_bg)
+      body.pack(fill="both", expand=True, padx=padding, pady=(4, padding))
+      self._ctk_section_outers.append(outer)
+      self._ctk_section_bodies.append(body)
+      self._ctk_section_titles.append(title)
+      return outer, body
+
+    frame = ttk.LabelFrame(parent, text=text, padding=padding)
+    return frame, frame
+
+  def _create_inline_frame(self, parent):
+    """Create a lightweight inline container."""
+    if self.customtkinter_active:
+      return ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
+    return ttk.Frame(parent)
+
+  def _create_entry(self, parent, textvariable=None, width=32, **kwargs):
+    """Create an entry widget with rounded corners in CTK mode."""
+    entry_kwargs = dict(kwargs)
+    if textvariable is not None:
+      entry_kwargs["textvariable"] = textvariable
+    if "width" not in entry_kwargs:
+      entry_kwargs["width"] = width
+
+    if self.customtkinter_active:
+      mode = self._get_effective_theme_mode()
+      is_dark = mode == "dark"
+      entry_kwargs.setdefault("corner_radius", 10)
+      entry_kwargs.setdefault("fg_color", "#0f0f0f" if is_dark else "#ececec")
+      entry_kwargs.setdefault("border_color", "#4a4a4a" if is_dark else "#bdbdbd")
+      entry_kwargs.setdefault("text_color", "#f2f2f2" if is_dark else "#111111")
+      entry = ctk.CTkEntry(parent, **entry_kwargs)
+      self._ctk_entries.append(entry)
+      return entry
+
+    return ttk.Entry(parent, **entry_kwargs)
+
+  def _create_button(self, parent, text, command, state="normal", **kwargs):
+    """Create a button with rounded corners in CTK mode."""
+    button_kwargs = dict(kwargs)
+    button_kwargs.update({"text": text, "command": command})
+
+    if self.customtkinter_active:
+      mode = self._get_effective_theme_mode()
+      is_dark = mode == "dark"
+      button_kwargs.setdefault("corner_radius", 10)
+      button_kwargs.setdefault("fg_color", "#111111" if is_dark else "#ececec")
+      button_kwargs.setdefault("hover_color", "#1f5f9f" if is_dark else "#d9e9f8")
+      button_kwargs.setdefault("border_width", 2)
+      button_kwargs.setdefault("border_color", "#7a7a7a" if is_dark else "#9a9a9a")
+      button_kwargs.setdefault("text_color", "#f2f2f2" if is_dark else "#111111")
+      button_kwargs.setdefault("text_color_disabled", "#8a8a8a" if is_dark else "#6e6e6e")
+      button = ctk.CTkButton(parent, **button_kwargs)
+      self._ctk_buttons.append(button)
+      if state != "normal":
+        button.configure(state=state)
+      return button
+
+    return ttk.Button(parent, state=state, **button_kwargs)
+
+  def _create_log_widget(self, parent, lines=10, **kwargs):
+    """Create a themed text area; rounded in CTK mode.
+
+    lines is interpreted as text lines for both ttk and CTK widgets.
+    """
+    if self.customtkinter_active:
+      mode = self._get_effective_theme_mode()
+      is_dark = mode == "dark"
+      textbox_kwargs = dict(kwargs)
+      textbox_kwargs.setdefault("corner_radius", 10)
+      textbox_kwargs.setdefault("wrap", "word")
+      textbox_kwargs.setdefault("fg_color", "#050505" if is_dark else "#ececec")
+      textbox_kwargs.setdefault("border_width", 1)
+      textbox_kwargs.setdefault("border_color", "#4a4a4a" if is_dark else "#bdbdbd")
+      textbox_kwargs.setdefault("text_color", "#f2f2f2" if is_dark else "#111111")
+      # CTkTextbox height is pixels; convert requested line count to approximate pixel height.
+      textbox_kwargs.setdefault("height", max(80, int(lines) * 22))
+      textbox = ctk.CTkTextbox(parent, **textbox_kwargs)
+      self._ctk_textboxes.append(textbox)
+      return textbox
+
+    text_kwargs = {"height": lines, "wrap": tk.WORD}
+    text_kwargs.update(kwargs)
+    return scrolledtext.ScrolledText(parent, **text_kwargs)
+
+  def _create_toplevel(self):
+    """Create a popup window that follows the active theme immediately."""
+    dialog = tk.Toplevel(self.root)
+    self._theme_dialog(dialog)
+    return dialog
+
+  def _theme_dialog(self, dialog):
+    """Apply current palette to a dialog and its classic tk children."""
+    effective_mode = self._get_effective_theme_mode()
+    palette = self._get_theme_palette(effective_mode)
+    try:
+      dialog.configure(bg=palette["bg"])
+    except Exception:
+      pass
+    self._apply_theme_to_tk_widgets(dialog, palette)
   def _bind_canvas_mousewheel(self, canvas, tab_widget):
     """Bind mousewheel scrolling to a tab's canvas only while hovered."""
 
     def _on_mousewheel(event):
-      """ on mousewheel."""
+      """Scroll the active canvas in response to mouse wheel input."""
       if hasattr(event, "delta") and event.delta:
         canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
       elif hasattr(event, "num"):
@@ -1443,13 +2074,13 @@ class FBDManager:
           canvas.yview_scroll(1, "units")
 
     def _bind(_event):
-      """ bind."""
+      """Enable wheel scrolling while the pointer is over this tab."""
       canvas.bind_all("<MouseWheel>", _on_mousewheel)
       canvas.bind_all("<Button-4>", _on_mousewheel)
       canvas.bind_all("<Button-5>", _on_mousewheel)
 
     def _unbind(_event):
-      """ unbind."""
+      """Disable wheel scrolling when the pointer leaves this tab."""
       canvas.unbind_all("<MouseWheel>")
       canvas.unbind_all("<Button-4>")
       canvas.unbind_all("<Button-5>")
@@ -1507,6 +2138,12 @@ class FBDManager:
 
   def _apply_theme_to_tk_widgets(self, widget, palette):
     """Apply base palette to classic Tk widgets recursively."""
+    # Skip styling CTK-managed widgets (they handle their own appearance),
+    # but still recurse into their children to reach nested classic tk widgets.
+    if ctk is not None and isinstance(widget, ctk.CTkBaseClass):
+      for child in widget.winfo_children():
+        self._apply_theme_to_tk_widgets(child, palette)
+      return
     try:
       if isinstance(widget, (tk.Frame, tk.LabelFrame, tk.Toplevel)):
         widget.configure(bg=palette["bg"])
@@ -1562,10 +2199,75 @@ class FBDManager:
     for child in widget.winfo_children():
       self._apply_theme_to_tk_widgets(child, palette)
 
+  def _refresh_ctk_container_theme(self, effective_mode):
+    """Refresh CTK colors when theme mode changes."""
+    if not self.customtkinter_active:
+      return
+
+    is_dark = effective_mode == "dark"
+    section_bg = "#000000" if is_dark else "#ececec"
+    border = "#4a4a4a" if is_dark else "#c3c3c3"
+    title_fg = "#f2f2f2" if is_dark else "#111111"
+    entry_bg = "#0f0f0f" if is_dark else "#ececec"
+    entry_border = "#4a4a4a" if is_dark else "#bdbdbd"
+    entry_fg = "#f2f2f2" if is_dark else "#111111"
+    button_bg = "#111111" if is_dark else "#ececec"
+    button_hover = "#1f5f9f" if is_dark else "#d9e9f8"
+    button_border = "#7a7a7a" if is_dark else "#9a9a9a"
+    button_fg = "#f2f2f2" if is_dark else "#111111"
+    button_fg_disabled = "#8a8a8a" if is_dark else "#6e6e6e"
+    textbox_bg = "#050505" if is_dark else "#ececec"
+    textbox_border = "#4a4a4a" if is_dark else "#bdbdbd"
+    textbox_fg = "#f2f2f2" if is_dark else "#111111"
+
+    for frame in self._ctk_scrollable_frames:
+      if frame.winfo_exists():
+        frame.configure(fg_color=section_bg)
+
+    for frame in self._ctk_section_outers:
+      if frame.winfo_exists():
+        frame.configure(fg_color=section_bg, border_color=border)
+
+    for frame in self._ctk_section_bodies:
+      if frame.winfo_exists():
+        frame.configure(fg_color=section_bg)
+
+    for label in self._ctk_section_titles:
+      if label.winfo_exists():
+        label.configure(text_color=title_fg)
+
+    for entry in self._ctk_entries:
+      if entry.winfo_exists():
+        entry.configure(fg_color=entry_bg, border_color=entry_border, text_color=entry_fg)
+
+    for button in self._ctk_buttons:
+      if button.winfo_exists():
+        button.configure(
+          fg_color=button_bg,
+          hover_color=button_hover,
+          border_color=button_border,
+          text_color=button_fg,
+          text_color_disabled=button_fg_disabled,
+        )
+
+    for textbox in self._ctk_textboxes:
+      if textbox.winfo_exists():
+        textbox.configure(
+          fg_color=textbox_bg,
+          border_color=textbox_border,
+          text_color=textbox_fg,
+        )
+
   def apply_theme(self):
     """Apply selected appearance mode to the whole interface."""
     effective_mode = self._get_effective_theme_mode()
     palette = self._get_theme_palette(effective_mode)
+
+    if self.customtkinter_active:
+      ctk.set_appearance_mode(effective_mode)
+      # Keep a consistent CTK accent theme while switching light/dark appearance.
+      ctk.set_default_color_theme("dark-blue")
+      self._refresh_ctk_container_theme(effective_mode)
 
     self.root.configure(bg=palette["bg"])
     style = ttk.Style(self.root)
@@ -1661,6 +2363,82 @@ class FBDManager:
 
     self._apply_theme_to_tk_widgets(self.root, palette)
 
+  def install_optional_customtkinter(self):
+    """Install CustomTkinter so the rounded UI toolkit can be enabled."""
+    self.log(
+      f"Installing optional CustomTkinter dependency for {_python_runtime_label()}..."
+    )
+    success, details = _install_optional_python_packages(["customtkinter"])
+    if not success:
+      guidance = _get_optional_python_install_guidance(["customtkinter"])
+      self.log(f"CustomTkinter install failed: {details}", "error")
+      self.log(guidance, "error")
+      return False, f"{details}\n\n{guidance}"
+
+    try:
+      global ctk
+      _refresh_python_import_paths("customtkinter")
+      import customtkinter as imported_ctk
+
+      ctk = imported_ctk
+      _mark_optional_customtkinter_prompt_seen()
+    except Exception as e:
+      details = str(e)
+      self.log(f"CustomTkinter import failed after install: {details}", "error")
+      return False, details
+
+    self.log("Optional CustomTkinter dependency installed successfully.")
+    return True, ""
+
+  def on_ui_toolkit_changed(self, _event=None):
+    """Handle toolkit selection, including optional install and restart flow."""
+    selected_label = (self.ui_toolkit_choice_var.get() or "").strip()
+    selected_mode = self.ui_toolkit_label_to_mode.get(selected_label, UI_TOOLKIT_TTK)
+    selected_mode = _normalize_ui_toolkit(selected_mode) or UI_TOOLKIT_TTK
+    self.ui_toolkit_var.set(selected_mode)
+
+    if selected_mode == self.ui_toolkit_mode:
+      return
+
+    if selected_mode == UI_TOOLKIT_CUSTOMTK and ctk is None:
+      install_now = messagebox.askyesno(
+        "CustomTkinter Not Installed",
+        "Rounded CustomTkinter mode needs the optional customtkinter package.\n\n"
+        "Legacy ttk mode, including Light/Dark/System themes, works without it.\n\n"
+        "Install CustomTkinter now?",
+      )
+      if not install_now:
+        self.ui_toolkit_var.set(UI_TOOLKIT_TTK)
+        self.ui_toolkit_choice_var.set(self.ui_toolkit_labels[UI_TOOLKIT_TTK])
+        return
+
+      success, details = self.install_optional_customtkinter()
+      if not success:
+        messagebox.showerror(
+          "CustomTkinter Install Failed",
+          "Could not install customtkinter automatically.\n\n"
+          f"Error: {details}\n\n"
+          "Keeping Legacy ttk mode.",
+        )
+        self.ui_toolkit_var.set(UI_TOOLKIT_TTK)
+        self.ui_toolkit_choice_var.set(self.ui_toolkit_labels[UI_TOOLKIT_TTK])
+        return
+
+    self.ui_toolkit_mode = selected_mode
+    self.save_config()
+    restart_now = messagebox.askyesno(
+      "Restart Required",
+      "UI toolkit selection saved.\n\n"
+      "Restart now to apply the toolkit switch?",
+    )
+    if not restart_now:
+      return
+
+    os.environ[UI_TOOLKIT_ENV_VAR] = selected_mode
+    python_executable = sys.executable
+    script_path = os.path.abspath(__file__)
+    os.execv(python_executable, [python_executable, script_path])
+
   def on_theme_mode_changed(self, _event=None):
     """Update active theme when the appearance combobox changes."""
     selected_label = (self.theme_choice_var.get() or "").strip()
@@ -1670,13 +2448,12 @@ class FBDManager:
 
   def create_node_tab(self):
     """Create node control tab"""
-    tab = ttk.Frame(self.notebook)
-    self.notebook.add(tab, text="Node & Mining")
+    tab = self._add_notebook_tab("Node & Mining")
 
     # Create canvas and scrollbar for scrollable content
     canvas = tk.Canvas(tab, highlightthickness=0)
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+    scrollable_frame = self._create_scrollable_frame(canvas)
 
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
@@ -1699,8 +2476,8 @@ class FBDManager:
     self._bind_canvas_mousewheel(canvas, tab)
 
     # Status frame
-    status_frame = ttk.LabelFrame(scrollable_frame, text="Node Status", padding=10)
-    status_frame.pack(fill="x", padx=10, pady=5)
+    status_outer, status_frame = self._create_section_frame(scrollable_frame, "Node Status")
+    status_outer.pack(fill="x", padx=10, pady=5)
 
     self.status_label = ttk.Label(
       status_frame, text="Status: Stopped", font=("Arial", 10, "bold")
@@ -1730,10 +2507,8 @@ class FBDManager:
     self.total_blocks_label.pack()
 
     # Mining config frame
-    config_frame = ttk.LabelFrame(
-      scrollable_frame, text="Mining Configuration", padding=10
-    )
-    config_frame.pack(fill="both", expand=True, padx=10, pady=5)
+    config_outer, config_frame = self._create_section_frame(scrollable_frame, "Mining Configuration")
+    config_outer.pack(fill="both", expand=True, padx=10, pady=5)
 
     # Network
     ttk.Label(config_frame, text="Network:").grid(
@@ -1752,9 +2527,8 @@ class FBDManager:
     # Host
     ttk.Label(config_frame, text="Host:").grid(row=1, column=0, sticky="w", pady=2)
     self.host_var = tk.StringVar(value="0.0.0.0")
-    ttk.Entry(config_frame, textvariable=self.host_var, width=32).grid(
-      row=1, column=1, sticky="ew", pady=2
-    )
+    self.host_entry = self._create_entry(config_frame, self.host_var, width=32)
+    self.host_entry.grid(row=1, column=1, sticky="ew", pady=2)
 
     # Log level
     ttk.Label(config_frame, text="Log Level:").grid(
@@ -1773,9 +2547,8 @@ class FBDManager:
     # Agent name
     ttk.Label(config_frame, text="Agent:").grid(row=3, column=0, sticky="w", pady=2)
     self.agent_var = tk.StringVar(value="tiMaxal")
-    ttk.Entry(config_frame, textvariable=self.agent_var, width=32).grid(
-      row=3, column=1, sticky="ew", pady=2
-    )
+    self.agent_entry = self._create_entry(config_frame, self.agent_var, width=32)
+    self.agent_entry.grid(row=3, column=1, sticky="ew", pady=2)
 
     # Enable mining
     self.mining_enabled = tk.BooleanVar(value=True)
@@ -1794,8 +2567,8 @@ class FBDManager:
     self.miner_address_var = tk.StringVar(
       value="fb1qp979k4ell5hvaktk5e3d6man66jrz2ucvkt748"
     )
-    self.miner_address_entry = ttk.Entry(
-      config_frame, textvariable=self.miner_address_var, width=32
+    self.miner_address_entry = self._create_entry(
+      config_frame, self.miner_address_var, width=32
     )
     self.miner_address_entry.grid(row=5, column=1, sticky="ew", pady=2)
 
@@ -1806,14 +2579,14 @@ class FBDManager:
       row=6, column=0, sticky="w", pady=2
     )
     self.miner_threads_var = tk.StringVar(value=str(default_miner_threads))
-    self.miner_threads_entry = ttk.Entry(
-      config_frame, textvariable=self.miner_threads_var, width=18
+    self.miner_threads_entry = self._create_entry(
+      config_frame, self.miner_threads_var, width=18
     )
     self.miner_threads_entry.grid(row=6, column=1, sticky="ew", pady=2)
 
     # Pool miner
-    pool_frame = ttk.LabelFrame(scrollable_frame, text="Pool Miner", padding=10)
-    pool_frame.pack(fill="x", padx=10, pady=5)
+    pool_outer, pool_frame = self._create_section_frame(scrollable_frame, "Pool Miner")
+    pool_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(pool_frame, text="Wallet Address:").grid(
       row=0, column=0, sticky="w", pady=2
@@ -1821,33 +2594,36 @@ class FBDManager:
     self.pool_miner_address_var = tk.StringVar(
       value=self.config.get("pool_miner_address", self.miner_address_var.get())
     )
-    ttk.Entry(pool_frame, textvariable=self.pool_miner_address_var, width=32).grid(
-      row=0, column=1, sticky="ew", pady=2
+    self.pool_miner_address_entry = self._create_entry(
+      pool_frame, self.pool_miner_address_var, width=32
     )
+    self.pool_miner_address_entry.grid(row=0, column=1, sticky="ew", pady=2)
 
     ttk.Label(pool_frame, text="Host:").grid(row=1, column=0, sticky="w", pady=2)
     self.pool_miner_host_var = tk.StringVar(value="pool.woodburn.au")
-    ttk.Entry(pool_frame, textvariable=self.pool_miner_host_var, width=32).grid(
-      row=1, column=1, sticky="ew", pady=2
+    self.pool_miner_host_entry = self._create_entry(
+      pool_frame, self.pool_miner_host_var, width=32
     )
+    self.pool_miner_host_entry.grid(row=1, column=1, sticky="ew", pady=2)
 
     ttk.Label(pool_frame, text="Threads (0 = auto):").grid(
       row=2, column=0, sticky="w", pady=2
     )
     self.pool_miner_threads_var = tk.StringVar(value="0")
-    ttk.Entry(pool_frame, textvariable=self.pool_miner_threads_var, width=32).grid(
-      row=2, column=1, sticky="ew", pady=2
+    self.pool_miner_threads_entry = self._create_entry(
+      pool_frame, self.pool_miner_threads_var, width=32
     )
+    self.pool_miner_threads_entry.grid(row=2, column=1, sticky="ew", pady=2)
 
-    pool_button_frame = ttk.Frame(pool_frame)
+    pool_button_frame = self._create_inline_frame(pool_frame)
     pool_button_frame.grid(row=3, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
-    self.start_pool_miner_btn = ttk.Button(
+    self.start_pool_miner_btn = self._create_button(
       pool_button_frame, text="Start Pool Miner", command=self.start_pool_miner
     )
     self.start_pool_miner_btn.pack(side="left", padx=5)
 
-    self.stop_pool_miner_btn = ttk.Button(
+    self.stop_pool_miner_btn = self._create_button(
       pool_button_frame,
       text="Stop Pool Miner",
       command=self.stop_pool_miner,
@@ -1917,50 +2693,48 @@ class FBDManager:
     config_frame.columnconfigure(2, weight=1)
 
     # Control buttons
-    button_frame = ttk.Frame(scrollable_frame)
+    button_frame = self._create_inline_frame(scrollable_frame)
     button_frame.pack(fill="x", padx=10, pady=5)
 
-    self.start_btn = ttk.Button(
-      button_frame, text="Start Node", command=self.start_node
-    )
+    self.start_btn = self._create_button(button_frame, text="Start Node", command=self.start_node)
     self.start_btn.pack(side="left", padx=5)
 
-    self.stop_btn = ttk.Button(
+    self.stop_btn = self._create_button(
       button_frame, text="Stop Node", command=self.stop_node, state="disabled"
     )
     self.stop_btn.pack(side="left", padx=5)
 
-    ttk.Button(
+    self._create_button(
       button_frame, text="Refresh Status", command=self.refresh_status
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       button_frame, text="Mining Stats", command=self.get_mining_stats
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       button_frame, text="Delete Chain Data", command=self.delete_chain_data
     ).pack(side="left", padx=5)
 
     # Log output
-    log_frame = ttk.LabelFrame(scrollable_frame, text="Node Output", padding=5)
-    log_frame.pack(fill="both", expand=True, padx=10, pady=5)
+    log_outer, log_frame = self._create_section_frame(scrollable_frame, "Node Output", padding=5)
+    log_outer.pack(fill="both", expand=True, padx=10, pady=5)
 
-    self.log_text = scrolledtext.ScrolledText(log_frame, height=10, wrap=tk.WORD)
+    self.log_text = self._create_log_widget(log_frame)
     self.log_text.pack(fill="both", expand=True)
 
     # Log controls
-    log_controls = ttk.Frame(log_frame)
+    log_controls = self._create_inline_frame(log_frame)
     log_controls.pack(fill="x", pady=(5, 0))
 
-    ttk.Button(
+    self._create_button(
       log_controls, text="Clear Log Display", command=self.clear_log_display
     ).pack(side="left", padx=5)
-    ttk.Button(log_controls, text="Open Log File", command=self.open_log_file).pack(
+    self._create_button(log_controls, text="Open Log File", command=self.open_log_file).pack(
       side="left", padx=5
     )
 
     log_path_label = ttk.Label(
       log_controls,
-      text=f"Log: ~/.fbdgui/fbdgui_test.log",
+      text=f"Log: ~/.fbdgui/fbdgui.log",
       font=("Arial", 8),
       foreground="gray",
     )
@@ -1968,13 +2742,12 @@ class FBDManager:
 
   def create_wallet_tab(self):
     """Create wallet operations tab"""
-    tab = ttk.Frame(self.notebook)
-    self.notebook.add(tab, text="Wallet")
+    tab = self._add_notebook_tab("Wallet")
 
     # Create canvas and scrollbar for scrollable content
     canvas = tk.Canvas(tab, highlightthickness=0)
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+    scrollable_frame = self._create_scrollable_frame(canvas)
 
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
@@ -2010,10 +2783,10 @@ class FBDManager:
     info_msg.pack(fill="x", padx=10, pady=(5, 0))
 
     # Wallet selection
-    wallet_frame = ttk.LabelFrame(
-      scrollable_frame, text="Wallet Selection", padding=10
+    wallet_outer, wallet_frame = self._create_section_frame(
+      scrollable_frame, "Wallet Selection", padding=10
     )
-    wallet_frame.pack(fill="x", padx=10, pady=5)
+    wallet_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(wallet_frame, text="Active Wallet:").pack(side="left", padx=5)
     self.wallet_name_var = tk.StringVar(value="main")
@@ -2029,26 +2802,26 @@ class FBDManager:
       "<Button-1>", lambda _e: self.list_wallets(show_feedback=False)
     )
 
-    ttk.Button(
+    self._create_button(
       wallet_frame, text="Copy Address", command=self.copy_wallet_address_dialog
     ).pack(side="left", padx=5)
-    ttk.Button(wallet_frame, text="Create Wallet", command=self.create_wallet).pack(
-      side="left", padx=5
-    )
-    ttk.Button(wallet_frame, text="Import Wallet", command=self.import_wallet).pack(
-      side="left", padx=5
-    )
-    ttk.Button(wallet_frame, text="Delete Wallet", command=self.delete_wallet).pack(
-      side="left", padx=5
-    )
+    self._create_button(
+      wallet_frame, text="Create Wallet", command=self.create_wallet
+    ).pack(side="left", padx=5)
+    self._create_button(
+      wallet_frame, text="Import Wallet", command=self.import_wallet
+    ).pack(side="left", padx=5)
+    self._create_button(
+      wallet_frame, text="Delete Wallet", command=self.delete_wallet
+    ).pack(side="left", padx=5)
 
     self.update_wallet_dropdown([self.wallet_name_var.get() or "main"])
 
     # Wallet info
-    info_frame = ttk.LabelFrame(
-      scrollable_frame, text="Wallet Information", padding=10
+    info_outer, info_frame = self._create_section_frame(
+      scrollable_frame, "Wallet Information", padding=10
     )
-    info_frame.pack(fill="x", padx=10, pady=5)
+    info_outer.pack(fill="x", padx=10, pady=5)
 
     self.balance_label = ttk.Label(
       info_frame, text="Balance: -", font=("Arial", 11, "bold")
@@ -2058,13 +2831,13 @@ class FBDManager:
     self.address_label = ttk.Label(info_frame, text="Address: -")
     self.address_label.pack()
 
-    ttk.Button(
+    self._create_button(
       info_frame, text="Get Wallet Info", command=self.get_wallet_info
     ).pack(pady=5)
 
     # Send payment
-    send_frame = ttk.LabelFrame(scrollable_frame, text="Send Payment", padding=10)
-    send_frame.pack(fill="x", padx=10, pady=5)
+    send_outer, send_frame = self._create_section_frame(scrollable_frame, "Send Payment", padding=10)
+    send_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(send_frame, text="To Address:").grid(
       row=0, column=0, sticky="w", pady=2
@@ -2079,46 +2852,45 @@ class FBDManager:
       width=48,
     )
     self.send_address_combo.grid(row=0, column=1, sticky="ew", pady=2)
-    ttk.Button(
-      send_frame, text="Save", command=self.save_current_address, width=5
+    self._create_button(
+      send_frame, text="Save", command=self.save_current_address, width=70
     ).grid(row=0, column=2, padx=(2, 0))
 
     ttk.Label(send_frame, text="Amount (FBC):").grid(
       row=1, column=0, sticky="w", pady=2
     )
     self.send_amount_var = tk.StringVar()
-    ttk.Entry(send_frame, textvariable=self.send_amount_var, width=50).grid(
+    self._create_entry(send_frame, textvariable=self.send_amount_var, width=50).grid(
       row=1, column=1, columnspan=2, sticky="ew", pady=2
     )
 
-    ttk.Button(send_frame, text="Send", command=self.send_payment).grid(
+    self._create_button(send_frame, text="Send", command=self.send_payment).grid(
       row=2, column=0, columnspan=3, pady=5
     )
 
     send_frame.columnconfigure(1, weight=1)
 
     # Transaction history
-    history_frame = ttk.LabelFrame(
-      scrollable_frame, text="Transaction History", padding=5
+    history_outer, history_frame = self._create_section_frame(
+      scrollable_frame, "Transaction History", padding=5
     )
-    history_frame.pack(fill="both", expand=True, padx=10, pady=5)
+    history_outer.pack(fill="both", expand=True, padx=10, pady=5)
 
-    self.tx_text = scrolledtext.ScrolledText(history_frame, height=10, wrap=tk.WORD)
+    self.tx_text = self._create_log_widget(history_frame)
     self.tx_text.pack(fill="both", expand=True)
 
-    ttk.Button(
+    self._create_button(
       history_frame, text="Load Transactions", command=self.load_transactions
     ).pack(pady=5)
 
   def create_auction_tab(self):
     """Create auction operations tab with scrolling"""
-    tab = ttk.Frame(self.notebook)
-    self.notebook.add(tab, text="Auctions")
+    tab = self._add_notebook_tab("Auctions")
 
     # Create canvas and scrollbar for scrollable content
     canvas = tk.Canvas(tab, highlightthickness=0)
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+    scrollable_frame = self._create_scrollable_frame(canvas)
 
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
@@ -2142,10 +2914,10 @@ class FBDManager:
 
     # Now use scrollable_frame instead of tab for all content
     # Wallet balance info
-    balance_info_frame = ttk.LabelFrame(
-      scrollable_frame, text="Wallet Balance", padding=10
+    balance_outer, balance_info_frame = self._create_section_frame(
+      scrollable_frame, "Wallet Balance", padding=10
     )
-    balance_info_frame.pack(fill="x", padx=10, pady=5)
+    balance_outer.pack(fill="x", padx=10, pady=5)
 
     # Info label about setting active wallet
     info_label = ttk.Label(
@@ -2161,17 +2933,17 @@ class FBDManager:
     )
     self.auction_balance_label.pack()
 
-    ttk.Button(
+    self._create_button(
       balance_info_frame,
       text="Refresh Balance",
       command=self.refresh_auction_balance,
     ).pack(pady=5)
 
     # Stage 6: Job Manager UI
-    jobs_frame = ttk.LabelFrame(
-      scrollable_frame, text="Active Automation Jobs", padding=5
+    jobs_outer, jobs_frame = self._create_section_frame(
+      scrollable_frame, "Active Automation Jobs", padding=5
     )
-    jobs_frame.pack(fill="x", padx=10, pady=5)
+    jobs_outer.pack(fill="x", padx=10, pady=5)
 
     # Create TreeView for jobs
     jobs_tree_frame = ttk.Frame(jobs_frame)
@@ -2220,20 +2992,35 @@ class FBDManager:
     self.jobs_tree.pack(side="left", fill="x", expand=True)
     jobs_scrollbar.pack(side="right", fill="y")
 
+    self.jobs_context_menu = tk.Menu(self.root, tearoff=0)
+    self.jobs_context_menu.add_command(
+      label="View Details", command=self.view_job_details
+    )
+    self.jobs_context_menu.add_command(
+      label="Block Calc", command=self.show_selected_job_block_calc
+    )
+    self.jobs_context_menu.add_command(
+      label="Cancel Job", command=self.cancel_selected_job
+    )
+    self.jobs_tree.bind("<Button-3>", self.show_jobs_context_menu)
+
     # Job control buttons
-    jobs_controls = ttk.Frame(jobs_frame)
+    jobs_controls = self._create_inline_frame(jobs_frame)
     jobs_controls.pack(fill="x", pady=(5, 0))
 
-    ttk.Button(
+    self._create_button(
       jobs_controls, text="Refresh Jobs", command=self.refresh_jobs_list
     ).pack(side="left", padx=2)
-    ttk.Button(
+    self._create_button(
       jobs_controls, text="View Details", command=self.view_job_details
     ).pack(side="left", padx=2)
-    ttk.Button(
+    self._create_button(
+      jobs_controls, text="Block Calc", command=self.show_selected_job_block_calc
+    ).pack(side="left", padx=2)
+    self._create_button(
       jobs_controls, text="Cancel Job", command=self.cancel_selected_job
     ).pack(side="left", padx=2)
-    ttk.Button(
+    self._create_button(
       jobs_controls, text="Clear Completed", command=self.clear_completed_jobs
     ).pack(side="left", padx=2)
 
@@ -2251,10 +3038,10 @@ class FBDManager:
     self.start_jobs_auto_refresh()
 
     # IMPORT AUCTIONS FROM WALLET
-    import_frame = ttk.LabelFrame(
-      scrollable_frame, text="Import Existing Auctions", padding=10
+    import_outer, import_frame = self._create_section_frame(
+      scrollable_frame, "Import Existing Auctions", padding=10
     )
-    import_frame.pack(fill="x", padx=10, pady=5)
+    import_outer.pack(fill="x", padx=10, pady=5)
 
     import_info = ttk.Label(
       import_frame,
@@ -2264,7 +3051,7 @@ class FBDManager:
     )
     import_info.pack(pady=(0, 10))
 
-    import_btn = ttk.Button(
+    import_btn = self._create_button(
       import_frame,
       text="Scan & Import Wallet Auctions",
       command=self.import_wallet_auctions,
@@ -2281,53 +3068,53 @@ class FBDManager:
     import_note.pack(pady=(5, 0))
 
     # Name operations
-    name_frame = ttk.LabelFrame(
-      scrollable_frame, text="Name Operations", padding=10
+    name_outer, name_frame = self._create_section_frame(
+      scrollable_frame, "Name Operations", padding=10
     )
-    name_frame.pack(fill="x", padx=10, pady=5)
+    name_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(name_frame, text="Name:").grid(row=0, column=0, sticky="w", pady=2)
     self.name_var = tk.StringVar()
-    ttk.Entry(name_frame, textvariable=self.name_var, width=30).grid(
+    self._create_entry(name_frame, textvariable=self.name_var, width=30).grid(
       row=0, column=1, sticky="ew", pady=2
     )
 
-    ttk.Button(name_frame, text="Get Name Info", command=self.get_name_info).grid(
+    self._create_button(name_frame, text="Get Name Info", command=self.get_name_info).grid(
       row=0, column=2, padx=5
     )
-    ttk.Button(
+    self._create_button(
       name_frame,
       text="Rollout Reminders",
       command=self.show_rollout_reminders_manager,
     ).grid(row=0, column=3, padx=5)
-    ttk.Button(
+    self._create_button(
       name_frame,
       text="Watchlist",
       command=self.show_watchlist_manager,
     ).grid(row=0, column=4, padx=5)
 
     # Auction actions
-    action_frame = ttk.Frame(name_frame)
+    action_frame = self._create_inline_frame(name_frame)
     action_frame.grid(row=1, column=0, columnspan=5, pady=10)
 
-    ttk.Button(action_frame, text="Open Auction", command=self.send_open).pack(
+    self._create_button(action_frame, text="Open Auction", command=self.send_open).pack(
       side="left", padx=2
     )
-    ttk.Button(action_frame, text="Place Bid", command=self.send_bid).pack(
+    self._create_button(action_frame, text="Place Bid", command=self.send_bid).pack(
       side="left", padx=2
     )
-    ttk.Button(action_frame, text="Reveal Bid", command=self.send_reveal).pack(
+    self._create_button(action_frame, text="Reveal Bid", command=self.send_reveal).pack(
       side="left", padx=2
     )
-    ttk.Button(action_frame, text="Register", command=self.send_register).pack(
+    self._create_button(action_frame, text="Register", command=self.send_register).pack(
       side="left", padx=2
     )
 
     name_frame.columnconfigure(1, weight=1)
 
     # Bid parameters
-    bid_frame = ttk.LabelFrame(scrollable_frame, text="Bid Parameters", padding=10)
-    bid_frame.pack(fill="x", padx=10, pady=5)
+    bid_outer, bid_frame = self._create_section_frame(scrollable_frame, "Bid Parameters", padding=10)
+    bid_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(bid_frame, text="Bid Amount (FBC):").grid(
       row=0, column=0, sticky="w", pady=2
@@ -2338,8 +3125,9 @@ class FBDManager:
       font=("Arial", 8, "italic"),
       foreground="#666",
     ).grid(row=0, column=2, sticky="w", padx=(5, 0))
+    bid_entry_width = 120 if self.customtkinter_active else 12
     self.bid_amount_var = tk.StringVar()
-    ttk.Entry(bid_frame, textvariable=self.bid_amount_var, width=20).grid(
+    self._create_entry(bid_frame, textvariable=self.bid_amount_var, width=bid_entry_width).grid(
       row=0, column=1, sticky="w", pady=2
     )
 
@@ -2353,7 +3141,7 @@ class FBDManager:
       foreground="#666",
     ).grid(row=1, column=2, sticky="w", padx=(5, 0))
     self.lockup_amount_var = tk.StringVar()
-    ttk.Entry(bid_frame, textvariable=self.lockup_amount_var, width=20).grid(
+    self._create_entry(bid_frame, textvariable=self.lockup_amount_var, width=bid_entry_width).grid(
       row=1, column=1, sticky="w", pady=2
     )
 
@@ -2366,30 +3154,30 @@ class FBDManager:
     ).grid(row=2, column=0, columnspan=2, sticky="w", pady=5)
 
     # Stage 4: Notification widget
-    notification_frame = ttk.LabelFrame(
-      scrollable_frame, text="Automation Notifications", padding=5
+    notification_outer, notification_frame = self._create_section_frame(
+      scrollable_frame, "Automation Notifications", padding=5
     )
-    notification_frame.pack(fill="x", padx=10, pady=5)
+    notification_outer.pack(fill="x", padx=10, pady=5)
 
     # Notification display
-    self.notification_text = scrolledtext.ScrolledText(
-      notification_frame, height=6, wrap=tk.WORD, state="disabled", bg="#f8f8f8"
+    self.notification_text = self._create_log_widget(
+      notification_frame, lines=10, wrap="word", state="disabled"
     )
     self.notification_text.pack(fill="both", expand=True)
 
     # Notification controls
-    notif_controls = ttk.Frame(notification_frame)
+    notif_controls = self._create_inline_frame(notification_frame)
     notif_controls.pack(fill="x", pady=(5, 0))
 
-    ttk.Button(
+    self._create_button(
       notif_controls,
       text="Refresh",
       command=lambda: self.notification_manager._refresh_widget(),
     ).pack(side="left", padx=2)
-    ttk.Button(
+    self._create_button(
       notif_controls, text="Clear All", command=self.clear_all_notifications
     ).pack(side="left", padx=2)
-    ttk.Button(
+    self._create_button(
       notif_controls,
       text="Mark All Read",
       command=lambda: self.notification_manager.mark_all_read(),
@@ -2399,23 +3187,23 @@ class FBDManager:
     self.notification_manager.set_widget(self.notification_text)
 
     # My names
-    mynames_frame = ttk.LabelFrame(scrollable_frame, text="My Names", padding=5)
-    mynames_frame.pack(fill="x", padx=10, pady=5)
+    mynames_outer, mynames_frame = self._create_section_frame(scrollable_frame, "My Names", padding=5)
+    mynames_outer.pack(fill="x", padx=10, pady=5)
 
-    self.names_text = scrolledtext.ScrolledText(
-      mynames_frame, height=6, wrap=tk.WORD
+    self.names_text = self._create_log_widget(
+      mynames_frame, lines=3, wrap="word"
     )
     self.names_text.pack(fill="both", expand=True)
 
-    ttk.Button(
+    self._create_button(
       mynames_frame, text="Load My Names", command=self.load_my_names
     ).pack(pady=5)
 
     # Auction info
-    info_text_frame = ttk.LabelFrame(
-      scrollable_frame, text="Name/Auction Details", padding=5
+    info_text_outer, info_text_frame = self._create_section_frame(
+      scrollable_frame, "Name/Auction Details", padding=5
     )
-    info_text_frame.pack(fill="x", padx=10, pady=5)
+    info_text_outer.pack(fill="x", padx=10, pady=5)
 
     # Info label explaining minimumBid
     info_help = ttk.Label(
@@ -2435,20 +3223,20 @@ class FBDManager:
     )
     example_help.pack(anchor="w", pady=(0, 2))
 
-    self.auction_info_text = scrolledtext.ScrolledText(
-      info_text_frame, height=6, wrap=tk.WORD
+    self.auction_info_text = self._create_log_widget(
+      info_text_frame, lines=12, wrap="word"
     )
     self.auction_info_text.pack(fill="both", expand=True)
 
   def create_block_calc_tab(self):
     """Create block calculator tab for auction timing"""
-    tab = ttk.Frame(self.notebook)
-    self.notebook.add(tab, text="Block Calc")
+    tab = self._add_notebook_tab("Block Calc")
+    self.block_calc_tab = "Block Calc" if self.customtkinter_active else tab
 
     # Create canvas and scrollbar for scrollable content
     canvas = tk.Canvas(tab, highlightthickness=0)
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+    scrollable_frame = self._create_scrollable_frame(canvas)
 
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
@@ -2471,10 +3259,10 @@ class FBDManager:
     self._bind_canvas_mousewheel(canvas, tab)
 
     # Current Status Section
-    status_frame = ttk.LabelFrame(
-      scrollable_frame, text="Current Blockchain Status", padding=10
+    status_outer, status_frame = self._create_section_frame(
+      scrollable_frame, "Current Blockchain Status", padding=10
     )
-    status_frame.pack(fill="x", padx=10, pady=5)
+    status_outer.pack(fill="x", padx=10, pady=5)
 
     self.calc_current_height_label = ttk.Label(
       status_frame, text="Current Block: -", font=("Arial", 10, "bold")
@@ -2486,9 +3274,9 @@ class FBDManager:
     )
     self.calc_node_status_label.pack()
 
-    refresh_frame = ttk.Frame(status_frame)
+    refresh_frame = self._create_inline_frame(status_frame)
     refresh_frame.pack(pady=5)
-    ttk.Button(
+    self._create_button(
       refresh_frame,
       text="Refresh Current Block",
       command=self.refresh_calc_current_block,
@@ -2503,8 +3291,8 @@ class FBDManager:
     ).pack(side="left", padx=(20, 0))
 
     # Input Method Selection
-    input_frame = ttk.LabelFrame(scrollable_frame, text="Input Method", padding=10)
-    input_frame.pack(fill="x", padx=10, pady=5)
+    input_outer, input_frame = self._create_section_frame(scrollable_frame, "Input Method", padding=10)
+    input_outer.pack(fill="x", padx=10, pady=5)
 
     self.calc_input_method = tk.StringVar(value="name")
 
@@ -2527,33 +3315,34 @@ class FBDManager:
     ).pack(side="left", padx=10)
 
     # Name Lookup Section
-    self.name_lookup_frame = ttk.LabelFrame(
-      scrollable_frame, text="Name Lookup", padding=10
+    self.name_lookup_outer, self.name_lookup_frame = self._create_section_frame(
+      scrollable_frame, "Name Lookup", padding=10
     )
-    self.name_lookup_frame.pack(fill="x", padx=10, pady=5)
+    self.name_lookup_outer.pack(fill="x", padx=10, pady=5)
 
-    name_entry_frame = ttk.Frame(self.name_lookup_frame)
+    name_entry_frame = self._create_inline_frame(self.name_lookup_frame)
     name_entry_frame.pack(fill="x")
 
     ttk.Label(name_entry_frame, text="Name:").pack(side="left", padx=5)
     self.calc_name_var = tk.StringVar()
-    ttk.Entry(name_entry_frame, textvariable=self.calc_name_var, width=30).pack(
+    name_field_width = 260 if self.customtkinter_active else 30
+    self._create_entry(name_entry_frame, textvariable=self.calc_name_var, width=name_field_width).pack(
       side="left", padx=5
     )
-    ttk.Button(
+    self._create_button(
       name_entry_frame,
       text="Lookup Auction Info",
       command=self.lookup_name_for_calc,
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       name_entry_frame, text="Clear", command=self.clear_calc_results
     ).pack(side="left", padx=5)
 
     # Manual Entry Section
-    self.manual_entry_frame = ttk.LabelFrame(
-      scrollable_frame, text="Manual Block Heights", padding=10
+    self.manual_entry_outer, self.manual_entry_frame = self._create_section_frame(
+      scrollable_frame, "Manual Block Heights", padding=10
     )
-    self.manual_entry_frame.pack(fill="x", padx=10, pady=5)
+    self.manual_entry_outer.pack(fill="x", padx=10, pady=5)
 
     # Timeline info
     timeline_info = ttk.Label(
@@ -2564,14 +3353,14 @@ class FBDManager:
     )
     timeline_info.pack(pady=(0, 5))
 
-    manual_grid = ttk.Frame(self.manual_entry_frame)
+    manual_grid = self._create_inline_frame(self.manual_entry_frame)
     manual_grid.pack(fill="x")
 
     ttk.Label(manual_grid, text="OPEN Block:").grid(
       row=0, column=0, sticky="w", pady=2, padx=5
     )
     self.calc_open_block_var = tk.StringVar()
-    ttk.Entry(manual_grid, textvariable=self.calc_open_block_var, width=15).grid(
+    self._create_entry(manual_grid, textvariable=self.calc_open_block_var, width=15).grid(
       row=0, column=1, pady=2, padx=5
     )
     ttk.Label(
@@ -2585,7 +3374,7 @@ class FBDManager:
       row=1, column=0, sticky="w", pady=2, padx=5
     )
     self.calc_bid_start_var = tk.StringVar()
-    ttk.Entry(manual_grid, textvariable=self.calc_bid_start_var, width=15).grid(
+    self._create_entry(manual_grid, textvariable=self.calc_bid_start_var, width=15).grid(
       row=1, column=1, pady=2, padx=5
     )
     ttk.Label(
@@ -2599,7 +3388,7 @@ class FBDManager:
       row=2, column=0, sticky="w", pady=2, padx=5
     )
     self.calc_reveal_start_var = tk.StringVar()
-    ttk.Entry(manual_grid, textvariable=self.calc_reveal_start_var, width=15).grid(
+    self._create_entry(manual_grid, textvariable=self.calc_reveal_start_var, width=15).grid(
       row=2, column=1, pady=2, padx=5
     )
     ttk.Label(
@@ -2613,7 +3402,7 @@ class FBDManager:
       row=3, column=0, sticky="w", pady=2, padx=5
     )
     self.calc_closed_block_var = tk.StringVar()
-    ttk.Entry(manual_grid, textvariable=self.calc_closed_block_var, width=15).grid(
+    self._create_entry(manual_grid, textvariable=self.calc_closed_block_var, width=15).grid(
       row=3, column=1, pady=2, padx=5
     )
     ttk.Label(
@@ -2623,7 +3412,7 @@ class FBDManager:
       foreground="#666",
     ).grid(row=3, column=2, sticky="w", padx=5)
 
-    ttk.Button(
+    self._create_button(
       self.manual_entry_frame,
       text="Calculate Times",
       command=self.calculate_manual_times,
@@ -2638,10 +3427,10 @@ class FBDManager:
     calc_note.pack()
 
     # Results Display
-    results_frame = ttk.LabelFrame(
-      scrollable_frame, text="Calculated Date/Time Results", padding=10
+    results_outer, results_frame = self._create_section_frame(
+      scrollable_frame, "Calculated Date/Time Results", padding=10
     )
-    results_frame.pack(fill="both", expand=True, padx=10, pady=5)
+    results_outer.pack(fill="both", expand=True, padx=10, pady=5)
 
     # Create Treeview for results
     columns = ("Phase", "Block Height", "Blocks Remaining", "Date/Time", "Status")
@@ -2684,11 +3473,11 @@ class FBDManager:
   def toggle_calc_input_method(self):
     """Toggle between name lookup and manual entry"""
     if self.calc_input_method.get() == "name":
-      self.name_lookup_frame.pack(fill="x", padx=10, pady=5)
-      self.manual_entry_frame.pack_forget()
+      self.name_lookup_outer.pack(fill="x", padx=10, pady=5)
+      self.manual_entry_outer.pack_forget()
     else:
-      self.name_lookup_frame.pack_forget()
-      self.manual_entry_frame.pack(fill="x", padx=10, pady=5)
+      self.name_lookup_outer.pack_forget()
+      self.manual_entry_outer.pack(fill="x", padx=10, pady=5)
 
   def refresh_calc_current_block(self, auto_retry=False):
     """Refresh current block height for calculator
@@ -2710,10 +3499,10 @@ class FBDManager:
     if result:
       # Success! Update display and reset state
       current_height = result.get("blocks", 0)
-      self.calc_current_height_label.config(
+      self.calc_current_height_label.configure(
         text=f"Current Block: {current_height:,}"
       )
-      self.calc_node_status_label.config(
+      self.calc_node_status_label.configure(
         text="Node Status: Running [OK]", foreground="green"
       )
       self.log(
@@ -2728,7 +3517,7 @@ class FBDManager:
 
       if node_process_running:
         # Node process is running but RPC not ready yet
-        self.calc_node_status_label.config(
+        self.calc_node_status_label.configure(
           text="Node Status: Starting... [ ]", foreground="orange"
         )
 
@@ -2746,7 +3535,7 @@ class FBDManager:
           self.log(
             "Block calculator: Max retries reached, node may not be responding"
           )
-          self.calc_node_status_label.config(
+          self.calc_node_status_label.configure(
             text="Node Status: Not Responding [!] ", foreground="red"
           )
           self.calc_refresh_in_progress = False
@@ -2755,7 +3544,7 @@ class FBDManager:
         return None
       else:
         # Node process is not running
-        self.calc_node_status_label.config(
+        self.calc_node_status_label.configure(
           text="Node Status: Not Running [OK]-", foreground="red"
         )
         self.log(
@@ -2777,7 +3566,7 @@ class FBDManager:
             if not (self.fbd_process and self.fbd_process.poll() is None):
               self.start_node()
               # Update status and begin auto-retry cycle
-              self.calc_node_status_label.config(
+              self.calc_node_status_label.configure(
                 text="Node Status: Starting... [ ]", foreground="orange"
               )
               self.calc_refresh_in_progress = True
@@ -2826,7 +3615,7 @@ class FBDManager:
           "The node is starting up. Please wait a moment and try again.",
         )
         # Update current block display status and start auto-retry
-        self.calc_node_status_label.config(
+        self.calc_node_status_label.configure(
           text="Node Status: Starting... [ ]", foreground="orange"
         )
         if not self.calc_refresh_in_progress:
@@ -2848,7 +3637,7 @@ class FBDManager:
         if not (self.fbd_process and self.fbd_process.poll() is None):
           self.start_node()
           # Update status labels and start auto-retry cycle
-          self.calc_node_status_label.config(
+          self.calc_node_status_label.configure(
             text="Node Status: Starting... [ ]", foreground="orange"
           )
           messagebox.showinfo(
@@ -3343,13 +4132,12 @@ class FBDManager:
 
   def create_settings_tab(self):
     """Create settings tab"""
-    tab = ttk.Frame(self.notebook)
-    self.notebook.add(tab, text="Settings")
+    tab = self._add_notebook_tab("Settings")
 
     # Create canvas and scrollbar for scrollable content
     canvas = tk.Canvas(tab, highlightthickness=0)
     scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+    scrollable_frame = self._create_scrollable_frame(canvas)
 
     scrollable_frame.bind(
       "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
@@ -3372,11 +4160,24 @@ class FBDManager:
     self._bind_canvas_mousewheel(canvas, tab)
 
     # Now use scrollable_frame instead of tab for all content
+    settings_actions = self._create_inline_frame(scrollable_frame)
+    settings_actions.pack(fill="x", padx=10, pady=(10, 5))
+
+    self._create_button(
+      settings_actions, text="Save All Settings", command=self.save_settings
+    ).pack(side="left", padx=5)
+    self._create_button(
+      settings_actions, text="Load Settings", command=self.load_settings_file
+    ).pack(side="left", padx=5)
+    self._create_button(
+      settings_actions, text="Reset to Defaults", command=self.reset_defaults
+    ).pack(side="left", padx=5)
+
     # Configuration Profiles
-    profile_frame = ttk.LabelFrame(
-      scrollable_frame, text="Configuration Profiles", padding=10
+    profile_outer, profile_frame = self._create_section_frame(
+      scrollable_frame, "Configuration Profiles", padding=10
     )
-    profile_frame.pack(fill="x", padx=10, pady=5)
+    profile_outer.pack(fill="x", padx=10, pady=5)
 
     profile_row1 = ttk.Frame(profile_frame)
     profile_row1.pack(fill="x", pady=2)
@@ -3391,26 +4192,26 @@ class FBDManager:
     )
     self.profile_combo.pack(side="left", padx=5)
 
-    profile_row2 = ttk.Frame(profile_frame)
+    profile_row2 = self._create_inline_frame(profile_frame)
     profile_row2.pack(fill="x", pady=2)
 
-    ttk.Button(profile_row2, text="Load Profile", command=self.load_profile).pack(
+    self._create_button(profile_row2, text="Load Profile", command=self.load_profile).pack(
       side="left", padx=5
     )
-    ttk.Button(
+    self._create_button(
       profile_row2, text="Save as New", command=self.save_new_profile
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       profile_row2, text="Update Current", command=self.update_profile
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       profile_row2, text="Delete Profile", command=self.delete_profile
     ).pack(side="left", padx=5)
 
-    appearance_frame = ttk.LabelFrame(
-      scrollable_frame, text="Appearance", padding=10
+    appearance_outer, appearance_frame = self._create_section_frame(
+      scrollable_frame, "Appearance", padding=10
     )
-    appearance_frame.pack(fill="x", padx=10, pady=5)
+    appearance_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(appearance_frame, text="Theme mode:").grid(
       row=0, column=0, sticky="w", pady=2
@@ -3432,20 +4233,40 @@ class FBDManager:
       foreground="gray",
     ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-    # FBD executable path
-    path_frame = ttk.LabelFrame(
-      scrollable_frame, text="FBD Path Configuration", padding=10
+    ttk.Label(appearance_frame, text="UI toolkit:").grid(
+      row=2, column=0, sticky="w", pady=(8, 2)
     )
-    path_frame.pack(fill="x", padx=10, pady=5)
+    self.ui_toolkit_combo = ttk.Combobox(
+      appearance_frame,
+      textvariable=self.ui_toolkit_choice_var,
+      values=list(self.ui_toolkit_labels.values()),
+      state="readonly",
+      width=30,
+    )
+    self.ui_toolkit_combo.grid(row=2, column=1, sticky="w", pady=(8, 2))
+    self.ui_toolkit_combo.bind("<<ComboboxSelected>>", self.on_ui_toolkit_changed)
+
+    ttk.Label(
+      appearance_frame,
+      text=f"Env override: {UI_TOOLKIT_ENV_VAR}=ttk|customtkinter",
+      font=("Arial", 8),
+      foreground="gray",
+    ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+    # FBD executable path
+    path_outer, path_frame = self._create_section_frame(
+      scrollable_frame, "FBD Path Configuration", padding=10
+    )
+    path_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(path_frame, text="FBD Executable:").grid(
       row=0, column=0, sticky="w", pady=2
     )
     self.fbd_path_var = tk.StringVar(value="./fbd")
-    ttk.Entry(path_frame, textvariable=self.fbd_path_var, width=50).grid(
+    self._create_entry(path_frame, textvariable=self.fbd_path_var, width=50).grid(
       row=0, column=1, sticky="ew", pady=2
     )
-    ttk.Button(path_frame, text="Browse", command=self.browse_fbd).grid(
+    self._create_button(path_frame, text="Browse", command=self.browse_fbd).grid(
       row=0, column=2, padx=5
     )
 
@@ -3459,20 +4280,20 @@ class FBDManager:
     path_frame.columnconfigure(1, weight=1)
 
     # RPC settings
-    rpc_frame = ttk.LabelFrame(
-      scrollable_frame, text="RPC Configuration", padding=10
+    rpc_outer, rpc_frame = self._create_section_frame(
+      scrollable_frame, "RPC Configuration", padding=10
     )
-    rpc_frame.pack(fill="x", padx=10, pady=5)
+    rpc_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(rpc_frame, text="RPC Host:").grid(row=0, column=0, sticky="w", pady=2)
     self.rpc_host_var = tk.StringVar(value="127.0.0.1")
-    ttk.Entry(rpc_frame, textvariable=self.rpc_host_var, width=30).grid(
+    self._create_entry(rpc_frame, textvariable=self.rpc_host_var, width=30).grid(
       row=0, column=1, sticky="ew", pady=2
     )
 
     ttk.Label(rpc_frame, text="RPC Port:").grid(row=1, column=0, sticky="w", pady=2)
     self.rpc_port_var = tk.StringVar(value="32869")
-    ttk.Entry(rpc_frame, textvariable=self.rpc_port_var, width=30).grid(
+    self._create_entry(rpc_frame, textvariable=self.rpc_port_var, width=30).grid(
       row=1, column=1, sticky="ew", pady=2
     )
     ttk.Label(
@@ -3491,17 +4312,17 @@ class FBDManager:
     rpc_frame.columnconfigure(1, weight=1)
 
     # Advanced options
-    advanced_frame = ttk.LabelFrame(
-      scrollable_frame, text="Advanced Options", padding=10
+    advanced_outer, advanced_frame = self._create_section_frame(
+      scrollable_frame, "Advanced Options", padding=10
     )
-    advanced_frame.pack(fill="x", padx=10, pady=5)
+    advanced_outer.pack(fill="x", padx=10, pady=5)
 
     # Custom datadir
     ttk.Label(advanced_frame, text="Custom Data Directory (optional):").grid(
       row=0, column=0, sticky="w", pady=2
     )
     self.custom_datadir_var = tk.StringVar(value="")
-    ttk.Entry(advanced_frame, textvariable=self.custom_datadir_var, width=40).grid(
+    self._create_entry(advanced_frame, textvariable=self.custom_datadir_var, width=40).grid(
       row=0, column=1, sticky="ew", pady=2
     )
     ttk.Label(
@@ -3516,7 +4337,7 @@ class FBDManager:
       row=2, column=0, sticky="w", pady=2
     )
     self.custom_dns_port_var = tk.StringVar(value="")
-    ttk.Entry(advanced_frame, textvariable=self.custom_dns_port_var, width=40).grid(
+    self._create_entry(advanced_frame, textvariable=self.custom_dns_port_var, width=40).grid(
       row=2, column=1, sticky="ew", pady=2
     )
 
@@ -3528,7 +4349,7 @@ class FBDManager:
     ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 5))
 
     # Utility button
-    ttk.Button(
+    self._create_button(
       advanced_frame,
       text="Check for Running FBD Instances",
       command=self.check_running_instances,
@@ -3537,29 +4358,29 @@ class FBDManager:
     advanced_frame.columnconfigure(1, weight=1)
 
     # Miner binary management
-    miner_frame = ttk.LabelFrame(
-      scrollable_frame, text="Miner Binary Management", padding=10
+    miner_outer, miner_frame = self._create_section_frame(
+      scrollable_frame, "Miner Binary Management", padding=10
     )
-    miner_frame.pack(fill="x", padx=10, pady=5)
+    miner_outer.pack(fill="x", padx=10, pady=5)
 
     ttk.Label(miner_frame, text="Miner Download URL:").grid(
       row=0, column=0, sticky="w", pady=2
     )
     self.miner_download_url_var = tk.StringVar(value="https://l.woodburn.au/miner")
-    ttk.Entry(miner_frame, textvariable=self.miner_download_url_var, width=50).grid(
+    self._create_entry(miner_frame, textvariable=self.miner_download_url_var, width=50).grid(
       row=0, column=1, sticky="ew", pady=2
     )
 
-    button_row = ttk.Frame(miner_frame)
+    button_row = self._create_inline_frame(miner_frame)
     button_row.grid(row=0, column=2, padx=5, sticky="n")
 
-    ttk.Button(
+    self._create_button(
       button_row,
       text="Check Miner Version",
       command=self.check_miner_version,
     ).pack(fill="x", pady=(0, 3))
 
-    ttk.Button(
+    self._create_button(
       button_row,
       text="Check & Auto-Update Miner",
       command=self.download_or_update_miner,
@@ -3592,18 +4413,18 @@ class FBDManager:
     self.fbd_download_url_var = tk.StringVar(
       value="https://fbd.dev/download/fbd-latest-linux-x86_64.zip"
     )
-    ttk.Entry(
+    self._create_entry(
       miner_frame, textvariable=self.fbd_download_url_var, width=50
     ).grid(row=4, column=1, sticky="ew", pady=2)
 
-    fbd_button_row = ttk.Frame(miner_frame)
+    fbd_button_row = self._create_inline_frame(miner_frame)
     fbd_button_row.grid(row=4, column=2, padx=5, sticky="n")
-    ttk.Button(
+    self._create_button(
       fbd_button_row,
       text="Check FBD Version",
       command=self.check_fbd_version,
     ).pack(fill="x", pady=(0, 3))
-    ttk.Button(
+    self._create_button(
       fbd_button_row,
       text="Check & Auto-Update FBD",
       command=self.download_or_update_fbd,
@@ -3622,10 +4443,10 @@ class FBDManager:
     miner_frame.columnconfigure(1, weight=1)
 
     # Auto-restart
-    restart_frame = ttk.LabelFrame(
-      scrollable_frame, text="Auto-Restart", padding=10
+    restart_outer, restart_frame = self._create_section_frame(
+      scrollable_frame, "Auto-Restart", padding=10
     )
-    restart_frame.pack(fill="x", padx=10, pady=5)
+    restart_outer.pack(fill="x", padx=10, pady=5)
 
     self.auto_restart_var = tk.BooleanVar(value=False)
     ttk.Checkbutton(
@@ -3645,15 +4466,15 @@ class FBDManager:
       anchor="w", pady=2
     )
     self.restart_delay_var = tk.StringVar(value="3")
-    ttk.Entry(restart_frame, textvariable=self.restart_delay_var, width=10).pack(
+    self._create_entry(restart_frame, textvariable=self.restart_delay_var, width=10).pack(
       anchor="w"
     )
 
     # Email Notifications (moved from Node tab)
-    email_frame = ttk.LabelFrame(
-      scrollable_frame, text="Email Notifications (Optional)", padding=10
+    email_outer, email_frame = self._create_section_frame(
+      scrollable_frame, "Email Notifications (Optional)", padding=10
     )
-    email_frame.pack(fill="x", padx=10, pady=5)
+    email_outer.pack(fill="x", padx=10, pady=5)
 
     # Enable checkbox
     self.email_enabled_var = tk.BooleanVar(value=False)
@@ -3668,7 +4489,7 @@ class FBDManager:
       row=1, column=0, sticky="w", pady=2
     )
     self.email_smtp_server_var = tk.StringVar(value="smtp.gmail.com")
-    ttk.Entry(email_frame, textvariable=self.email_smtp_server_var, width=30).grid(
+    self._create_entry(email_frame, textvariable=self.email_smtp_server_var, width=30).grid(
       row=1, column=1, sticky="ew", pady=2
     )
 
@@ -3677,7 +4498,7 @@ class FBDManager:
       row=2, column=0, sticky="w", pady=2
     )
     self.email_smtp_port_var = tk.StringVar(value="587")
-    ttk.Entry(email_frame, textvariable=self.email_smtp_port_var, width=30).grid(
+    self._create_entry(email_frame, textvariable=self.email_smtp_port_var, width=30).grid(
       row=2, column=1, sticky="ew", pady=2
     )
 
@@ -3686,7 +4507,7 @@ class FBDManager:
       row=3, column=0, sticky="w", pady=2
     )
     self.email_from_var = tk.StringVar(value="")
-    ttk.Entry(email_frame, textvariable=self.email_from_var, width=30).grid(
+    self._create_entry(email_frame, textvariable=self.email_from_var, width=30).grid(
       row=3, column=1, sticky="ew", pady=2
     )
 
@@ -3695,15 +4516,15 @@ class FBDManager:
       row=4, column=0, sticky="w", pady=2
     )
     self.email_password_var = tk.StringVar(value="")
-    self.email_password_entry = ttk.Entry(
+    self.email_password_entry = self._create_entry(
       email_frame, textvariable=self.email_password_var, width=25, show="*"
     )
     self.email_password_entry.grid(row=4, column=1, sticky="ew", pady=2)
 
     # Show/Hide password button
     self.email_password_visible = False
-    ttk.Button(
-      email_frame, text="Show", width=8, command=self.toggle_email_password
+    self._create_button(
+      email_frame, text="Show", width=90, command=self.toggle_email_password
     ).grid(row=4, column=2, padx=5)
 
     # To Email
@@ -3711,7 +4532,7 @@ class FBDManager:
       row=5, column=0, sticky="w", pady=2
     )
     self.email_to_var = tk.StringVar(value="")
-    ttk.Entry(email_frame, textvariable=self.email_to_var, width=30).grid(
+    self._create_entry(email_frame, textvariable=self.email_to_var, width=30).grid(
       row=5, column=1, sticky="ew", pady=2
     )
 
@@ -3724,13 +4545,13 @@ class FBDManager:
     ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(5, 2))
 
     # Buttons
-    email_buttons = ttk.Frame(email_frame)
+    email_buttons = self._create_inline_frame(email_frame)
     email_buttons.grid(row=7, column=0, columnspan=3, pady=10)
 
-    ttk.Button(
+    self._create_button(
       email_buttons, text="Save Email Settings", command=self.save_email_settings
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       email_buttons, text="Send Test Email", command=self.send_test_email
     ).pack(side="left", padx=5)
 
@@ -3743,20 +4564,6 @@ class FBDManager:
     ).grid(row=8, column=0, columnspan=3, sticky="w")
 
     email_frame.columnconfigure(1, weight=1)
-
-    # Save/Load buttons
-    button_frame = ttk.Frame(scrollable_frame)
-    button_frame.pack(fill="x", padx=10, pady=20)
-
-    ttk.Button(
-      button_frame, text="Save All Settings", command=self.save_settings
-    ).pack(side="left", padx=5)
-    ttk.Button(
-      button_frame, text="Load Settings", command=self.load_settings_file
-    ).pack(side="left", padx=5)
-    ttk.Button(
-      button_frame, text="Reset to Defaults", command=self.reset_defaults
-    ).pack(side="left", padx=5)
 
   def toggle_mining_options(self):
     """Enable/disable mining options based on checkbox"""
@@ -3771,8 +4578,8 @@ class FBDManager:
         "Pool miner is running. Stop it before enabling internal miner.",
       )
     state = "normal" if self.mining_enabled.get() else "disabled"
-    self.miner_address_entry.config(state=state)
-    self.miner_threads_entry.config(state=state)
+    self.miner_address_entry.configure(state=state)
+    self.miner_threads_entry.configure(state=state)
 
   def build_pool_miner_command(self):
     """Build pool miner command line from settings"""
@@ -3901,9 +4708,9 @@ class FBDManager:
       else:
         self.log("Starting FBD node...")
         self.restart_count = 0 # Reset counter on manual start
-        self.restart_label.config(text="Restarts: 0")
+        self.restart_label.configure(text="Restarts: 0")
         self.blocks_mined_session = 0 # Reset session block counter
-        self.blocks_won_label.config(text="Blocks Won (Session): 0")
+        self.blocks_won_label.configure(text="Blocks Won (Session): 0")
 
       self.log(f"Command: {' '.join(cmd)}")
 
@@ -3920,10 +4727,10 @@ class FBDManager:
       threading.Thread(target=self.monitor_output, daemon=True).start()
 
       # Update UI
-      self.start_btn.config(state="disabled")
-      self.stop_btn.config(state="normal")
-      self.mining_checkbox.config(state="disabled") # Disable while running
-      self.status_label.config(text="Status: Starting...", foreground="orange")
+      self.start_btn.configure(state="disabled")
+      self.stop_btn.configure(state="normal")
+      self.mining_checkbox.configure(state="disabled") # Disable while running
+      self.status_label.configure(text="Status: Starting...", foreground="orange")
 
       # Update block calc tab status
       self.update_block_calc_status(starting=True)
@@ -3961,10 +4768,10 @@ class FBDManager:
       self.fbd_process = None
 
       # Update UI
-      self.start_btn.config(state="normal")
-      self.stop_btn.config(state="disabled")
-      self.mining_checkbox.config(state="normal") # Re-enable after stop
-      self.status_label.config(text="Status: Stopped")
+      self.start_btn.configure(state="normal")
+      self.stop_btn.configure(state="disabled")
+      self.mining_checkbox.configure(state="normal") # Re-enable after stop
+      self.status_label.configure(text="Status: Stopped")
 
       # Update block calc tab status
       self.update_block_calc_status(stopped=True)
@@ -4015,11 +4822,11 @@ class FBDManager:
       )
 
       threading.Thread(target=self.monitor_pool_miner_output, daemon=True).start()
-      self.start_pool_miner_btn.config(state="disabled")
-      self.stop_pool_miner_btn.config(state="normal")
-      self.mining_checkbox.config(state="disabled")
-      self.miner_address_entry.config(state="disabled")
-      self.miner_threads_entry.config(state="disabled")
+      self.start_pool_miner_btn.configure(state="disabled")
+      self.stop_pool_miner_btn.configure(state="normal")
+      self.mining_checkbox.configure(state="disabled")
+      self.miner_address_entry.configure(state="disabled")
+      self.miner_threads_entry.configure(state="disabled")
 
     except Exception as e:
       self.log(f"Error starting pool miner: {e}")
@@ -4051,10 +4858,10 @@ class FBDManager:
 
   def update_pool_miner_ui_stopped(self):
     """Update pool miner controls when the miner stops"""
-    self.start_pool_miner_btn.config(state="normal")
-    self.stop_pool_miner_btn.config(state="disabled")
+    self.start_pool_miner_btn.configure(state="normal")
+    self.stop_pool_miner_btn.configure(state="disabled")
     if not self.fbd_process or self.fbd_process.poll() is not None:
-      self.mining_checkbox.config(state="normal")
+      self.mining_checkbox.configure(state="normal")
     self.toggle_mining_options()
 
   def monitor_pool_miner_output(self):
@@ -4174,7 +4981,7 @@ class FBDManager:
 
     # Update restart counter in UI
     self.root.after(
-      0, lambda: self.restart_label.config(text=f"Restarts: {self.restart_count}")
+      0, lambda: self.restart_label.configure(text=f"Restarts: {self.restart_count}")
     )
 
     # Schedule restart after delay
@@ -4209,7 +5016,7 @@ class FBDManager:
   def update_block_win_ui(self, line):
     """Update UI to show block win (runs in main thread)"""
     # Update counter
-    self.blocks_won_label.config(
+    self.blocks_won_label.configure(
       text=f"Blocks Won (Session): {self.blocks_mined_session}"
     )
 
@@ -4228,12 +5035,12 @@ class FBDManager:
 
   def update_ui_stopped(self):
     """Update UI when node stops without restart"""
-    self.start_btn.config(state="normal")
-    self.stop_btn.config(state="disabled")
-    self.mining_checkbox.config(state="normal") # Re-enable after stop
-    self.status_label.config(text="Status: Stopped", foreground="red")
-    self.block_label.config(text="Block Height: -")
-    self.peers_label.config(text="Peers: -")
+    self.start_btn.configure(state="normal")
+    self.stop_btn.configure(state="disabled")
+    self.mining_checkbox.configure(state="normal") # Re-enable after stop
+    self.status_label.configure(text="Status: Stopped", foreground="red")
+    self.block_label.configure(text="Block Height: -")
+    self.peers_label.configure(text="Peers: -")
 
     # Update block calc tab status
     self.update_block_calc_status(stopped=True)
@@ -4247,7 +5054,7 @@ class FBDManager:
     self.log("[!] Fix the issue before re-enabling auto-restart")
 
     # Create custom dialog with action button
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Index-Address Error - Chain Reset Required")
     dialog.geometry("600x400")
     dialog.transient(self.root)
@@ -4264,7 +5071,7 @@ class FBDManager:
       foreground="#cc0000",
     ).pack(pady=(0, 10))
 
-    error_text = scrolledtext.ScrolledText(
+    error_text = self._create_log_widget(
       message_frame, height=10, wrap=tk.WORD, font=("Arial", 10)
     )
     error_text.pack(fill="both", expand=True)
@@ -4288,7 +5095,7 @@ class FBDManager:
       "*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]*[~]\n\n"
       "[!] IMPORTANT: Wallet address operations require --index-address!",
     )
-    error_text.config(state="disabled")
+    error_text.configure(state="disabled")
 
     # Button frame
     button_frame = ttk.Frame(dialog, padding=10)
@@ -4299,11 +5106,11 @@ class FBDManager:
       dialog.destroy()
       self.delete_chain_data(auto_restart=True, from_error=True)
 
-    ttk.Button(
+    self._create_button(
       button_frame, text="[!] Delete Chain & Restart", command=delete_and_close
     ).pack(side="left", padx=5)
 
-    ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(
+    self._create_button(button_frame, text="Close", command=dialog.destroy).pack(
       side="right", padx=5
     )
 
@@ -4381,7 +5188,7 @@ class FBDManager:
       self.log(f"[!] Deleting blockchain data from: {datadir}")
 
       # Show progress
-      progress_dialog = tk.Toplevel(self.root)
+      progress_dialog = self._create_toplevel()
       progress_dialog.title("Deleting Chain Data")
       progress_dialog.geometry("450x180")
       progress_dialog.transient(self.root)
@@ -4398,7 +5205,7 @@ class FBDManager:
 
       # Delete each directory
       for name, dir_path in dirs_to_delete:
-        progress_label.config(text=f"Deleting {name}: {dir_path}")
+        progress_label.configure(text=f"Deleting {name}: {dir_path}")
         progress_dialog.update()
 
         if sys.platform == "win32":
@@ -4593,9 +5400,9 @@ class FBDManager:
     if not process_running:
       # Node is not running - update UI to reflect stopped state
       if self.status_label.cget("text") != "Status: Stopped":
-        self.status_label.config(text="Status: Stopped", foreground="red")
-        self.block_label.config(text="Block Height: -")
-        self.peers_label.config(text="Peers: -")
+        self.status_label.configure(text="Status: Stopped", foreground="red")
+        self.block_label.configure(text="Block Height: -")
+        self.peers_label.configure(text="Peers: -")
         # Update block calc tab
         self.update_block_calc_status(stopped=True)
       return
@@ -4605,8 +5412,8 @@ class FBDManager:
 
     if info:
       blocks = info.get("blocks", "-")
-      self.status_label.config(text="Status: Running", foreground="green")
-      self.block_label.config(text=f"Block Height: {blocks}")
+      self.status_label.configure(text="Status: Running", foreground="green")
+      self.block_label.configure(text=f"Block Height: {blocks}")
 
       # Update block calc tab with current height
       self.update_block_calc_status(current_height=blocks)
@@ -4615,7 +5422,7 @@ class FBDManager:
       net_info = self.rpc_call("getnetworkinfo")
       if net_info:
         connections = net_info.get("connections", "-")
-        self.peers_label.config(text=f"Peers: {connections}")
+        self.peers_label.configure(text=f"Peers: {connections}")
     else:
       # If RPC fails, try fbdctl
       try:
@@ -4636,8 +5443,8 @@ class FBDManager:
             else response
           )
           blocks = info.get("blocks", "-")
-          self.status_label.config(text="Status: Running", foreground="green")
-          self.block_label.config(text=f"Block Height: {blocks}")
+          self.status_label.configure(text="Status: Running", foreground="green")
+          self.block_label.configure(text=f"Block Height: {blocks}")
 
           # Update block calc tab with current height
           self.update_block_calc_status(current_height=blocks)
@@ -4659,36 +5466,36 @@ class FBDManager:
               else response
             )
             peer_count = len(peers) if isinstance(peers, list) else "-"
-            self.peers_label.config(text=f"Peers: {peer_count}")
+            self.peers_label.configure(text=f"Peers: {peer_count}")
         else:
           # fbdctl failed, check if node is still starting
           if process_running:
-            self.status_label.config(
+            self.status_label.configure(
               text="Status: Starting...", foreground="orange"
             )
             # Update block calc as starting
             self.update_block_calc_status(starting=True)
           else:
-            self.status_label.config(
+            self.status_label.configure(
               text="Status: Stopped", foreground="red"
             )
-            self.block_label.config(text="Block Height: -")
-            self.peers_label.config(text="Peers: -")
+            self.block_label.configure(text="Block Height: -")
+            self.peers_label.configure(text="Peers: -")
             # Update block calc as stopped
             self.update_block_calc_status(stopped=True)
       except Exception as e:
         self.log(f"Error refreshing status: {e}")
         # If error occurred, check if node is still starting
         if process_running:
-          self.status_label.config(
+          self.status_label.configure(
             text="Status: Starting...", foreground="orange"
           )
           # Update block calc as starting
           self.update_block_calc_status(starting=True)
         else:
-          self.status_label.config(text="Status: Stopped", foreground="red")
-          self.block_label.config(text="Block Height: -")
-          self.peers_label.config(text="Peers: -")
+          self.status_label.configure(text="Status: Stopped", foreground="red")
+          self.block_label.configure(text="Block Height: -")
+          self.peers_label.configure(text="Peers: -")
           # Update block calc as stopped
           self.update_block_calc_status(stopped=True)
           # Update block calc as stopped
@@ -4713,32 +5520,32 @@ class FBDManager:
     try:
       if stopped:
         # Node stopped
-        self.calc_node_status_label.config(
+        self.calc_node_status_label.configure(
           text="Node Status: Not Running [OK]-", foreground="red"
         )
-        self.calc_current_height_label.config(text="Current Block: -")
+        self.calc_current_height_label.configure(text="Current Block: -")
         # Reset refresh state
         self.calc_refresh_in_progress = False
         self.calc_refresh_retry_count = 0
       elif starting:
         # Node starting
-        self.calc_node_status_label.config(
+        self.calc_node_status_label.configure(
           text="Node Status: Starting... [ ]", foreground="orange"
         )
         # Don't change current height while starting
       elif current_height is not None:
         # Node running with current height
-        self.calc_node_status_label.config(
+        self.calc_node_status_label.configure(
           text="Node Status: Running [OK]", foreground="green"
         )
         # Format height with comma separator if it's a number
         try:
           height_int = int(current_height)
-          self.calc_current_height_label.config(
+          self.calc_current_height_label.configure(
             text=f"Current Block: {height_int:,}"
           )
         except (ValueError, TypeError):
-          self.calc_current_height_label.config(
+          self.calc_current_height_label.configure(
             text=f"Current Block: {current_height}"
           )
         # Reset refresh state on success
@@ -4851,7 +5658,7 @@ class FBDManager:
       )
       if result:
         # Switch to Node & Mining tab
-        self.notebook.select(0)
+        self._notebook_select(0)
       return False
     return True
 
@@ -5005,7 +5812,7 @@ class FBDManager:
       )
       return
 
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Copy Wallet Address")
     dialog.geometry("620x260")
     dialog.transient(self.root)
@@ -5079,7 +5886,7 @@ class FBDManager:
         return
 
       copy_to_clipboard(address)
-      result_label.config(text=f"Copied address for wallet '{selected_wallet}'.")
+      result_label.configure(text=f"Copied address for wallet '{selected_wallet}'.")
       self.log(f"Copied address for wallet '{selected_wallet}': {address}")
 
     def copy_into_send_to():
@@ -5090,7 +5897,7 @@ class FBDManager:
 
       copy_to_clipboard(address)
       self.send_address_var.set(address)
-      result_label.config(
+      result_label.configure(
         text=f"Copied address and filled Send To for wallet '{selected_wallet}'."
       )
       self.log(
@@ -5105,7 +5912,7 @@ class FBDManager:
 
       copy_to_clipboard(address)
       self.pool_miner_address_var.set(address)
-      result_label.config(
+      result_label.configure(
         text=f"Copied address and filled Pool Miner Address for wallet '{selected_wallet}'."
       )
       self.log(
@@ -5120,7 +5927,7 @@ class FBDManager:
 
       copy_to_clipboard(address)
       self.miner_address_var.set(address)
-      result_label.config(
+      result_label.configure(
         text=f"Copied address and filled Miner Address for wallet '{selected_wallet}'."
       )
       self.log(f"Filled Miner Address from wallet '{selected_wallet}': {address}")
@@ -5128,25 +5935,25 @@ class FBDManager:
     button_frame = ttk.Frame(dialog)
     button_frame.pack(pady=(0, 10))
 
-    ttk.Button(
+    self._create_button(
       button_frame, text="Copy Address", command=copy_selected_wallet_address
     ).pack(side="left", padx=5)
 
-    ttk.Button(
+    self._create_button(
       button_frame, text="Copy -> Send To", command=copy_into_send_to
     ).pack(side="left", padx=5)
 
-    ttk.Button(
+    self._create_button(
       button_frame,
       text="Copy -> Pool Miner Address",
       command=copy_into_pool_miner_address,
     ).pack(side="left", padx=5)
 
-    ttk.Button(
+    self._create_button(
       button_frame, text="Copy -> Miner Address", command=copy_into_miner_address
     ).pack(side="left", padx=5)
 
-    ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(
+    self._create_button(button_frame, text="Close", command=dialog.destroy).pack(
       side="left", padx=5
     )
 
@@ -5170,7 +5977,7 @@ class FBDManager:
     if not self.check_node_running():
       return
 
-    name = tk.simpledialog.askstring("Create Wallet", "Enter wallet name:")
+    name = simpledialog.askstring("Create Wallet", "Enter wallet name:")
     if name:
       result = self.rpc_call("createwallet", [name])
       if result:
@@ -5187,20 +5994,20 @@ class FBDManager:
       return
 
     # Create dialog for wallet import
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Import Wallet")
     dialog.geometry("500x250")
     dialog.transient(self.root)
     dialog.grab_set()
 
     ttk.Label(dialog, text="Wallet Name:", font=("Arial", 10)).pack(pady=(10, 5))
-    name_entry = ttk.Entry(dialog, width=40)
+    name_entry = self._create_entry(dialog, width=40)
     name_entry.pack(pady=5)
 
     ttk.Label(dialog, text="Seed Phrase (Mnemonic):", font=("Arial", 10)).pack(
       pady=(10, 5)
     )
-    seed_entry = ttk.Entry(dialog, width=60)
+    seed_entry = self._create_entry(dialog, width=60)
     seed_entry.pack(pady=5)
 
     ttk.Label(
@@ -5277,8 +6084,8 @@ class FBDManager:
           f"Details: {e}",
         )
 
-    ttk.Button(dialog, text="Import", command=do_import).pack(pady=10)
-    ttk.Button(dialog, text="Cancel", command=dialog.destroy).pack(pady=5)
+    self._create_button(dialog, text="Import", command=do_import).pack(pady=10)
+    self._create_button(dialog, text="Cancel", command=dialog.destroy).pack(pady=5)
 
   def delete_wallet(self):
     """Delete a wallet"""
@@ -5328,7 +6135,7 @@ class FBDManager:
 
   def show_seed_dialog(self, wallet_name, seed_phrase):
     """Show seed phrase with copy-to-clipboard functionality"""
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Wallet Created - SAVE YOUR SEED!")
     dialog.geometry("600x300")
     dialog.transient(self.root)
@@ -5353,7 +6160,7 @@ class FBDManager:
     seed_text = tk.Text(seed_frame, height=4, wrap=tk.WORD, font=("Courier", 11))
     seed_text.pack(fill="both", expand=True)
     seed_text.insert("1.0", seed_phrase)
-    seed_text.config(state="disabled")
+    seed_text.configure(state="disabled")
 
     # Copy button
     def copy_to_clipboard():
@@ -5361,10 +6168,10 @@ class FBDManager:
       self.root.clipboard_clear()
       self.root.clipboard_append(seed_phrase)
       self.root.update()
-      copy_btn.config(text="[OK] Copied!")
-      self.root.after(2000, lambda: copy_btn.config(text="Copy to Clipboard"))
+      copy_btn.configure(text="[OK] Copied!")
+      self.root.after(2000, lambda: copy_btn.configure(text="Copy to Clipboard"))
 
-    copy_btn = ttk.Button(
+    copy_btn = self._create_button(
       dialog, text="Copy to Clipboard", command=copy_to_clipboard
     )
     copy_btn.pack(pady=10)
@@ -5383,7 +6190,7 @@ class FBDManager:
       foreground="red",
     ).pack(pady=5)
 
-    ttk.Button(dialog, text="I Have Saved My Seed", command=dialog.destroy).pack(
+    self._create_button(dialog, text="I Have Saved My Seed", command=dialog.destroy).pack(
       pady=10
     )
 
@@ -5423,12 +6230,12 @@ class FBDManager:
         immature = data.get("immature", 0) / 1000000
 
         # Update balance display - show spendable (confirmed = spendable + immature)
-        self.balance_label.config(
+        self.balance_label.configure(
           text=f"Balance: {spendable:.6f} FBC (Confirmed: {confirmed:.6f}, Immature: {immature:.6f})"
         )
 
         # Also update auction tab balance for consistency
-        self.auction_balance_label.config(
+        self.auction_balance_label.configure(
           text=f"Confirmed: {confirmed:.6f} FBC (Available for bids: {spendable:.6f} FBC, Immature: {immature:.6f} FBC)"
         )
 
@@ -5441,21 +6248,21 @@ class FBDManager:
         total_blocks_mined = self.get_total_blocks_mined(wallet)
 
         if total_blocks_mined is not None:
-          self.total_blocks_label.config(
+          self.total_blocks_label.configure(
             text=f"Total Blocks (Chain): {total_blocks_mined} total ({immature_blocks} immature)"
           )
           self.log(
             f"Total blocks mined: {total_blocks_mined}, Immature: {immature_blocks}"
           )
         elif immature_blocks > 0:
-          self.total_blocks_label.config(
+          self.total_blocks_label.configure(
             text=f"Total Blocks (Chain): ~{immature_blocks} immature"
           )
           self.log(
             f"Estimated immature blocks: {immature_blocks} (immature balance: {immature:.6f} FBC)"
           )
         else:
-          self.total_blocks_label.config(text="Total Blocks (Chain): 0")
+          self.total_blocks_label.configure(text="Total Blocks (Chain): 0")
 
         # Get wallet info for address
         cmd_info, _ = self.get_fbdctl_command(
@@ -5476,7 +6283,7 @@ class FBDManager:
             else response_info
           )
           address = data_info.get("address", "N/A")
-          self.address_label.config(text=f"Address: {address}")
+          self.address_label.configure(text=f"Address: {address}")
 
         self.log(f"Wallet balance loaded for: {wallet}")
         self.log(f"Spendable: {spendable:.6f} FBC")
@@ -5503,8 +6310,8 @@ class FBDManager:
             "no such wallet",
           ]
         ):
-          self.balance_label.config(text="Balance: Wallet not found")
-          self.address_label.config(text="Address: -")
+          self.balance_label.configure(text="Balance: Wallet not found")
+          self.address_label.configure(text="Address: -")
           self.show_wallet_not_found_dialog(wallet)
           return
 
@@ -5523,7 +6330,7 @@ class FBDManager:
 
   def show_wallet_not_found_dialog(self, wallet_name):
     """Show custom dialog with actionable options when wallet not found"""
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Wallet Not Found")
     dialog.geometry("450x200")
     dialog.transient(self.root)
@@ -5569,21 +6376,21 @@ class FBDManager:
       """On cancel."""
       dialog.destroy()
 
-    ttk.Button(
+    self._create_button(
       btn_frame,
       text="->>> Refresh Wallet Dropdown",
       command=on_list_wallets,
       width=25,
     ).grid(row=0, column=0, padx=5, pady=5)
 
-    ttk.Button(
+    self._create_button(
       btn_frame,
       text="* Create New Wallet",
       command=on_create_wallet,
       width=25,
     ).grid(row=0, column=1, padx=5, pady=5)
 
-    ttk.Button(
+    self._create_button(
       btn_frame,
       text="Cancel",
       command=on_cancel,
@@ -5675,12 +6482,12 @@ class FBDManager:
         spendable = data.get("spendable", 0) / 1000000
         immature = data.get("immature", 0) / 1000000
 
-        self.auction_balance_label.config(
+        self.auction_balance_label.configure(
           text=f"Confirmed: {confirmed:.6f} FBC (Available for bids: {spendable:.6f} FBC, Immature: {immature:.6f} FBC)"
         )
 
         # Also update wallet tab display
-        self.balance_label.config(
+        self.balance_label.configure(
           text=f"Balance: {spendable:.6f} FBC (Confirmed: {confirmed:.6f}, Immature: {immature:.6f})"
         )
 
@@ -5706,7 +6513,7 @@ class FBDManager:
             "no such wallet",
           ]
         ):
-          self.auction_balance_label.config(text="Wallet not found")
+          self.auction_balance_label.configure(text="Wallet not found")
           self.log(f"Wallet not found: {wallet}")
           self.show_wallet_not_found_dialog(wallet)
           return
@@ -5725,7 +6532,7 @@ class FBDManager:
         or "wallet does not" in error_str.lower()
         or "no wallet" in error_str.lower()
       ):
-        self.auction_balance_label.config(text="Wallet not found")
+        self.auction_balance_label.configure(text="Wallet not found")
         self.log(f"Wallet not found: {wallet}")
         self.show_wallet_not_found_dialog(wallet)
       else:
@@ -5744,6 +6551,145 @@ class FBDManager:
       self.log("All notifications cleared")
 
   # Stage 6: Job Manager UI Methods
+  def show_jobs_context_menu(self, event):
+    """Show the jobs context menu for the row under the pointer."""
+    row_id = self.jobs_tree.identify_row(event.y)
+    if not row_id:
+      return
+
+    self.jobs_tree.selection_set(row_id)
+    self.jobs_tree.focus(row_id)
+
+    try:
+      self.jobs_context_menu.tk_popup(event.x_root, event.y_root)
+    finally:
+      self.jobs_context_menu.grab_release()
+
+  def _get_selected_job_context(self, show_warning=True):
+    """Return the jobs payload and selected job for the jobs tree selection."""
+    selection = self.jobs_tree.selection()
+    if not selection:
+      if show_warning:
+        messagebox.showwarning("No Selection", "Please select a job first.")
+      return (None, None)
+
+    selected_job_id = selection[0]
+    jobs_data = self.load_auction_jobs()
+    jobs = jobs_data.get("jobs", [])
+    job = next((j for j in jobs if j.get("id") == selected_job_id), None)
+
+    if job is None:
+      item = self.jobs_tree.item(selected_job_id)
+      job_name = item.get("values", [None])[0]
+      job = next((j for j in jobs if j.get("name") == job_name), None)
+
+    if job is None and show_warning:
+      messagebox.showerror("Error", "Job not found in data file.")
+
+    return (jobs_data, job)
+
+  def _populate_block_calc_from_job(self, name):
+    """Populate the main block calc tab for the selected job name."""
+    self.calc_input_method.set("name")
+    self.toggle_calc_input_method()
+    self.clear_calc_results()
+    self.calc_name_var.set(name)
+    self.lookup_name_for_calc()
+    return [
+      self.calc_results_tree.item(item, "values")
+      for item in self.calc_results_tree.get_children()
+    ]
+
+  def _open_block_calc_tab(self):
+    """Switch to the block calc tab."""
+    self._notebook_select(self.block_calc_tab)
+
+  def _show_block_calc_popup(self, name, rows):
+    """Show block calculator results for a job in a popup window."""
+    popup = self._create_toplevel()
+    popup.title(f"Block Calc - {name}")
+    popup.geometry("860x360")
+    popup.transient(self.root)
+    popup.bind("<Escape>", lambda _event: popup.destroy())
+
+    container = ttk.Frame(popup, padding=10)
+    container.pack(fill="both", expand=True)
+
+    ttk.Label(
+      container,
+      text=f"Auction timing for '{name}'",
+      font=("Arial", 11, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+      container,
+      text=f"{self.calc_current_height_label.cget('text')} | Esc closes this window",
+      foreground="#666666",
+      font=("Arial", 9),
+    ).pack(anchor="w", pady=(2, 8))
+
+    tree_frame = ttk.Frame(container)
+    tree_frame.pack(fill="both", expand=True)
+
+    columns = ("Phase", "Block Height", "Blocks Remaining", "Date/Time", "Status")
+    popup_tree = ttk.Treeview(
+      tree_frame, columns=columns, show="headings", height=8
+    )
+    popup_tree.heading("Phase", text="Auction Phase")
+    popup_tree.heading("Block Height", text="Block Height")
+    popup_tree.heading("Blocks Remaining", text="Blocks Until")
+    popup_tree.heading("Date/Time", text="Approximate Date/Time")
+    popup_tree.heading("Status", text="Status")
+    popup_tree.column("Phase", width=180)
+    popup_tree.column("Block Height", width=110)
+    popup_tree.column("Blocks Remaining", width=110)
+    popup_tree.column("Date/Time", width=210)
+    popup_tree.column("Status", width=110)
+
+    popup_scrollbar = ttk.Scrollbar(
+      tree_frame, orient="vertical", command=popup_tree.yview
+    )
+    popup_tree.configure(yscrollcommand=popup_scrollbar.set)
+
+    popup_tree.pack(side="left", fill="both", expand=True)
+    popup_scrollbar.pack(side="right", fill="y")
+
+    for row in rows:
+      popup_tree.insert("", "end", values=row)
+
+    button_frame = ttk.Frame(container)
+    button_frame.pack(fill="x", pady=(8, 0))
+
+    self._create_button(
+      button_frame,
+      text="Open Block Calc Tab",
+      command=lambda: (self._open_block_calc_tab(), popup.destroy()),
+    ).pack(side="left")
+    self._create_button(button_frame, text="Close", command=popup.destroy).pack(side="right")
+
+    popup.update_idletasks()
+    x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (popup.winfo_width() // 2)
+    y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (popup.winfo_height() // 2)
+    popup.geometry(f"+{x}+{y}")
+    popup.focus_force()
+
+  def show_selected_job_block_calc(self):
+    """Load block calc data for the selected job and show it in a popup."""
+    _jobs_data, job = self._get_selected_job_context()
+    if not job:
+      return
+
+    name = job.get("name", "").strip()
+    if not name:
+      messagebox.showerror("Error", "Selected job does not have a valid name.")
+      return
+
+    rows = self._populate_block_calc_from_job(name)
+    if not rows:
+      self.log(f"Block calculator: No popup shown for '{name}' because no rows were available")
+      return
+
+    self._show_block_calc_popup(name, rows)
+
   def refresh_jobs_list(self):
     """Refresh the jobs list in the TreeView"""
     try:
@@ -5813,6 +6759,7 @@ class FBDManager:
         self.jobs_tree.insert(
           "",
           "end",
+          iid=job["id"],
           values=(
             name,
             status_text,
@@ -5903,6 +6850,10 @@ class FBDManager:
   def _ensure_job_schema(self, job):
     """Backfill missing fields for imported/legacy jobs."""
     changed = False
+
+    if "id" not in job or not job.get("id"):
+      job["id"] = str(uuid.uuid4())
+      changed = True
 
     if "txids" not in job or not isinstance(job.get("txids"), dict):
       job["txids"] = {"open": None, "bid": None, "reveal": [], "register": None}
@@ -6148,44 +7099,30 @@ class FBDManager:
 
   def view_job_details(self):
     """View full details of selected job"""
-    selection = self.jobs_tree.selection()
-    if not selection:
-      messagebox.showwarning(
-        "No Selection", "Please select a job to view details."
-      )
-      return
-
     try:
-      # Get selected job name
-      item = self.jobs_tree.item(selection[0])
-      job_name = item["values"][0]
-
-      # Find job in data - load_auction_jobs returns dict, extract jobs list
-      jobs_data = self.load_auction_jobs()
-      jobs = jobs_data.get("jobs", [])
-      job = next((j for j in jobs if j.get("name") == job_name), None)
-
+      _jobs_data, job = self._get_selected_job_context()
       if not job:
-        messagebox.showerror("Error", "Job not found in data file.")
         return
 
+      job_name = job.get("name", "Unknown")
+
       # Create details popup
-      details_window = tk.Toplevel(self.root)
+      details_window = self._create_toplevel()
       details_window.title(f"Job Details - {job_name}")
       details_window.geometry("600x400")
 
       # JSON display
-      details_text = scrolledtext.ScrolledText(
+      details_text = self._create_log_widget(
         details_window, wrap=tk.WORD, font=("Courier", 10)
       )
       details_text.pack(fill="both", expand=True, padx=10, pady=10)
 
       # Format JSON nicely
       details_text.insert("1.0", json.dumps(job, indent=2, default=str))
-      details_text.config(state="disabled")
+      details_text.configure(state="disabled")
 
       # Close button
-      ttk.Button(
+      self._create_button(
         details_window, text="Close", command=details_window.destroy
       ).pack(pady=5)
 
@@ -6195,15 +7132,12 @@ class FBDManager:
 
   def cancel_selected_job(self):
     """Cancel the selected automation job"""
-    selection = self.jobs_tree.selection()
-    if not selection:
-      messagebox.showwarning("No Selection", "Please select a job to cancel.")
-      return
-
     try:
-      # Get selected job name
-      item = self.jobs_tree.item(selection[0])
-      job_name = item["values"][0]
+      jobs_data, job = self._get_selected_job_context()
+      if not job:
+        return
+
+      job_name = job.get("name", "Unknown")
 
       # Confirm cancellation
       if not messagebox.askyesno(
@@ -6213,33 +7147,19 @@ class FBDManager:
         return
 
       # Update job status to cancelled
-      jobs = self.load_auction_jobs()
-      for job in jobs:
-        if job.get("name") == job_name:
-          # Only cancel if not already terminal
-          if job.get("status") not in [
-            "registered",
-            "lost",
-            "failed",
-            "cancelled",
-          ]:
-            job["status"] = "cancelled"
-            job["cancelled_at"] = datetime.now().isoformat()
-            self._save_auction_jobs(jobs)
-            self.log(f"Job cancelled: {job_name}")
-            messagebox.showinfo(
-              "Success", f"Job '{job_name}' has been cancelled."
-            )
-            self.refresh_jobs_list()
-            return
-          else:
-            messagebox.showinfo(
-              "Already Complete",
-              f"Job '{job_name}' is already complete (status: {job.get('status')}).",
-            )
-            return
+      if job.get("status") in ["registered", "lost", "failed", "cancelled"]:
+        messagebox.showinfo(
+          "Already Complete",
+          f"Job '{job_name}' is already complete (status: {job.get('status')}).",
+        )
+        return
 
-      messagebox.showerror("Error", "Job not found.")
+      job["status"] = "cancelled"
+      job["cancelled_at"] = datetime.now().isoformat()
+      self.save_auction_jobs(jobs_data)
+      self.log(f"Job cancelled: {job_name}")
+      messagebox.showinfo("Success", f"Job '{job_name}' has been cancelled.")
+      self.refresh_jobs_list()
 
     except Exception as e:
       messagebox.showerror("Error", f"Failed to cancel job: {e}")
@@ -6248,7 +7168,8 @@ class FBDManager:
   def clear_completed_jobs(self):
     """Remove completed jobs (registered/lost/failed) from the list"""
     try:
-      jobs = self.load_auction_jobs()
+      jobs_data = self.load_auction_jobs()
+      jobs = jobs_data.get("jobs", [])
       initial_count = len(jobs)
 
       # Keep only non-terminal jobs
@@ -6270,7 +7191,8 @@ class FBDManager:
         "Confirm Clear",
         f"Remove {removed_count} completed job(s)?\n\nThis cannot be undone.",
       ):
-        self._save_auction_jobs(active_jobs)
+        jobs_data["jobs"] = active_jobs
+        self.save_auction_jobs(jobs_data)
         self.log(f"Cleared {removed_count} completed job(s)")
         messagebox.showinfo(
           "Success", f"Removed {removed_count} completed job(s)."
@@ -6510,31 +7432,30 @@ class FBDManager:
 
     if messagebox.askyesno("Confirm", f"Open auction for '{name}'?"):
       try:
-        cmd, fbdctl_path = self.get_fbdctl_command(
-          "--wallet", wallet, "sendopen", name
-        )
-        result = subprocess.run(
-          cmd,
-          capture_output=True,
-          text=True,
-          cwd=Path(self.fbd_path_var.get()).parent,
-        )
-
-        if result.returncode == 0:
-          response = json.loads(result.stdout)
-          data = (
-            response.get("result", {})
-            if isinstance(response, dict)
-            else response
-          )
-          messagebox.showinfo(
-            "Success", f"Auction opened!\nTXID: {data.get('txid', 'N/A')}"
-          )
-        else:
-          messagebox.showerror("Error", result.stderr)
+        txid = self._run_send_open(name, wallet)
+        messagebox.showinfo("Success", f"Auction opened!\nTXID: {txid}")
 
       except Exception as e:
         messagebox.showerror("Error", f"Failed to open auction: {e}")
+
+  def _run_send_open(self, name, wallet):
+    """Execute the raw OPEN transaction and return the txid."""
+    cmd, _ = self.get_fbdctl_command("--wallet", wallet, "sendopen", name)
+    result = subprocess.run(
+      cmd,
+      capture_output=True,
+      text=True,
+      cwd=Path(self.fbd_path_var.get()).parent,
+      timeout=30,
+    )
+
+    if result.returncode != 0:
+      error_msg = result.stderr.strip() or "Unknown error"
+      raise RuntimeError(error_msg)
+
+    response = json.loads(result.stdout)
+    data = response.get("result", {}) if isinstance(response, dict) else response
+    return data.get("txid", "N/A")
 
   def send_bid(self):
     """Place a bid - Stage 1: Smart bidding with auto-open"""
@@ -6840,6 +7761,7 @@ class FBDManager:
     default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
     default_config = {
       "fbd_path": "./fbd",
+      "ui_toolkit": UI_TOOLKIT_TTK,
       "theme_mode": "system",
       "network": "main",
       "host": "0.0.0.0",
@@ -6882,6 +7804,7 @@ class FBDManager:
     """Save configuration to file"""
     config = {
       "fbd_path": self.fbd_path_var.get(),
+      "ui_toolkit": self.ui_toolkit_var.get(),
       "theme_mode": self.theme_mode_var.get(),
       "network": self.network_var.get(),
       "host": self.host_var.get(),
@@ -6926,6 +7849,13 @@ class FBDManager:
     """Load saved settings into UI"""
     default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
     self.fbd_path_var.set(self.config.get("fbd_path", "./fbd"))
+    toolkit_mode = _normalize_ui_toolkit(self.config.get("ui_toolkit", UI_TOOLKIT_TTK)) or UI_TOOLKIT_TTK
+    if toolkit_mode == UI_TOOLKIT_CUSTOMTK and ctk is None:
+      toolkit_mode = UI_TOOLKIT_TTK
+    self.ui_toolkit_mode = toolkit_mode
+    self.customtkinter_active = self.ui_toolkit_mode == UI_TOOLKIT_CUSTOMTK and ctk is not None
+    self.ui_toolkit_var.set(toolkit_mode)
+    self.ui_toolkit_choice_var.set(self.ui_toolkit_labels.get(toolkit_mode, self.ui_toolkit_labels[UI_TOOLKIT_TTK]))
     theme_mode = (self.config.get("theme_mode", "system") or "system").lower()
     if theme_mode not in ("system", "dark", "light"):
       theme_mode = "system"
@@ -6982,10 +7912,12 @@ class FBDManager:
 
     self.toggle_mining_options()
     self.apply_theme()
+    self._update_settings_saved_snapshot()
 
   def save_settings(self):
     """Save current settings"""
     if self.save_config():
+      self._update_settings_saved_snapshot()
       messagebox.showinfo("Success", "Settings saved successfully!")
       self.log("Settings saved")
     else:
@@ -7016,6 +7948,7 @@ class FBDManager:
       # Clear the config file by reloading defaults
       self.config = {
         "fbd_path": "./fbd",
+        "ui_toolkit": UI_TOOLKIT_TTK,
         "theme_mode": "system",
         "network": "main",
         "host": "0.0.0.0",
@@ -7646,22 +8579,22 @@ class FBDManager:
     """Toggle email password visibility"""
     self.email_password_visible = not self.email_password_visible
     if self.email_password_visible:
-      self.email_password_entry.config(show="")
+      self.email_password_entry.configure(show="")
       # Find and update button text
       for child in self.email_password_entry.master.winfo_children():
         if isinstance(child, ttk.Button) and child.cget("text") in [
           "Show",
           "Hide",
         ]:
-          child.config(text="Hide")
+          child.configure(text="Hide")
     else:
-      self.email_password_entry.config(show="*")
+      self.email_password_entry.configure(show="*")
       for child in self.email_password_entry.master.winfo_children():
         if isinstance(child, ttk.Button) and child.cget("text") in [
           "Show",
           "Hide",
         ]:
-          child.config(text="Show")
+          child.configure(text="Show")
 
   def save_email_settings(self):
     """Save email notification settings"""
@@ -8305,9 +9238,9 @@ class FBDManager:
       messagebox.showerror("Error", f"Could not open config directory:\n{e}")
 
   def show_help(self):
-    """Display help dialog with quick reference"""
+    """Display in-app quick help for setup, theming, mining, and docs."""
     help_text = """
-FBD Node Manager v4.1.0 - Quick Help
+FBD Node Manager v0-5-0 - Quick Help
 
 PLATFORM:
 * Linux-native Python app (runs on native Linux, WSL, or Windows via WSL)
@@ -8317,7 +9250,15 @@ PLATFORM:
 DEPENDENCIES:
 * Python 3.6+ with tkinter (python3-tk)
 * python3-requests library
-* Auto-checked on startup with install offers
+* customtkinter (optional rounded UI toolkit mode)
+* Base dependencies are auto-checked on startup with install offers
+
+APPEARANCE:
+* Settings -> Theme mode: Same as system, Dark, or Light
+* Legacy ttk supports the same Light/Dark/System theme choices
+* Rounded CustomTkinter is optional and only needed for the rounded toolkit
+* If CustomTkinter is not installed, the app continues in Legacy ttk mode
+* If you skip it at startup, choosing Rounded CustomTkinter in Settings offers install again
 
 [!] REQUIRED BINARIES:
 * fbd & fbdctl NOT included in repo (file size)
@@ -8391,7 +9332,7 @@ to access config and log files!
 """
 
     # Create custom dialog
-    help_window = tk.Toplevel(self.root)
+    help_window = self._create_toplevel()
     help_window.title("FBD Node Manager - Help")
     help_window.geometry("650x600")
 
@@ -8399,28 +9340,28 @@ to access config and log files!
     text_frame = ttk.Frame(help_window, padding=10)
     text_frame.pack(fill="both", expand=True)
 
-    help_display = scrolledtext.ScrolledText(
+    help_display = self._create_log_widget(
       text_frame, wrap=tk.WORD, font=("Courier", 10)
     )
     help_display.pack(fill="both", expand=True)
     help_display.insert("1.0", help_text)
-    help_display.config(state="disabled")
+    help_display.configure(state="disabled")
 
     # Buttons
     button_frame = ttk.Frame(help_window, padding=10)
     button_frame.pack(fill="x")
 
-    ttk.Button(
+    self._create_button(
       button_frame,
       text="Open README.md",
       command=lambda: self.open_doc_file("README.md"),
     ).pack(side="left", padx=5)
-    ttk.Button(
+    self._create_button(
       button_frame,
       text="Open QUICKSTART.txt",
       command=lambda: self.open_doc_file("QUICKSTART.txt"),
     ).pack(side="left", padx=5)
-    ttk.Button(button_frame, text="Close", command=help_window.destroy).pack(
+    self._create_button(button_frame, text="Close", command=help_window.destroy).pack(
       side="right", padx=5
     )
 
@@ -8516,21 +9457,21 @@ to access config and log files!
         content = f.read()
 
       # Create a window to display the file
-      view_window = tk.Toplevel(self.root)
+      view_window = self._create_toplevel()
       view_window.title(f"View: {filename}")
       view_window.geometry("800x600")
 
       text_frame = ttk.Frame(view_window, padding=10)
       text_frame.pack(fill="both", expand=True)
 
-      text_display = scrolledtext.ScrolledText(
+      text_display = self._create_log_widget(
         text_frame, wrap=tk.WORD, font=("Courier", 9)
       )
       text_display.pack(fill="both", expand=True)
       text_display.insert("1.0", content)
-      text_display.config(state="disabled")
+      text_display.configure(state="disabled")
 
-      ttk.Button(view_window, text="Close", command=view_window.destroy).pack(
+      self._create_button(view_window, text="Close", command=view_window.destroy).pack(
         pady=10
       )
 
@@ -8677,7 +9618,7 @@ to access config and log files!
 
   def show_rollout_reminder_dialog(self, name, rollout_height):
     """Prompt for one or more rollout reminder triggers."""
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title(f"Rollout Reminder: {name}")
     dialog.geometry("520x250")
     dialog.resizable(False, False)
@@ -8717,7 +9658,7 @@ to access config and log files!
       text="Notify blocks before:",
       variable=notify_blocks_var,
     ).pack(side="left")
-    ttk.Entry(blocks_row, textvariable=blocks_before_var, width=8).pack(
+    self._create_entry(blocks_row, textvariable=blocks_before_var, width=8).pack(
       side="left", padx=(8, 4)
     )
     ttk.Label(blocks_row, text="blocks").pack(side="left")
@@ -8729,7 +9670,7 @@ to access config and log files!
       text="Notify hours before:",
       variable=notify_hours_var,
     ).pack(side="left")
-    ttk.Entry(minutes_row, textvariable=hours_before_var, width=8).pack(
+    self._create_entry(minutes_row, textvariable=hours_before_var, width=8).pack(
       side="left", padx=(19, 4)
     )
     ttk.Label(minutes_row, text="hours (approx, 30 blocks/hour)").pack(side="left")
@@ -8821,10 +9762,10 @@ to access config and log files!
 
     button_row = ttk.Frame(frame)
     button_row.pack(fill="x", pady=(15, 0))
-    ttk.Button(button_row, text="Save", command=save_reminders).pack(
+    self._create_button(button_row, text="Save", command=save_reminders).pack(
       side="right", padx=(8, 0)
     )
-    ttk.Button(button_row, text="Cancel", command=dialog.destroy).pack(
+    self._create_button(button_row, text="Cancel", command=dialog.destroy).pack(
       side="right"
     )
 
@@ -8840,7 +9781,7 @@ to access config and log files!
 
   def show_rollout_reminders_manager(self):
     """Show a small UI for viewing and removing pending rollout reminders."""
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Pending Rollout Reminders")
     dialog.geometry("760x320")
     dialog.transient(self.root)
@@ -8925,19 +9866,19 @@ to access config and log files!
 
     button_row = ttk.Frame(frame)
     button_row.pack(fill="x", pady=(10, 0))
-    ttk.Button(
+    self._create_button(
       button_row,
       text="Remove Selected",
       command=remove_selected,
     ).pack(side="left")
-    ttk.Button(button_row, text="Refresh", command=refresh_tree).pack(
+    self._create_button(button_row, text="Refresh", command=refresh_tree).pack(
       side="left", padx=(8, 0)
     )
-    ttk.Button(button_row, text="Close", command=dialog.destroy).pack(side="right")
+    self._create_button(button_row, text="Close", command=dialog.destroy).pack(side="right")
 
     refresh_tree()
 
-  # ── Watchlist methods ────────────────────────────────────────────────────────
+  # â”€â”€ Watchlist methods â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   def is_on_watchlist(self, name):
     """Return True if name is already on the watchlist."""
@@ -8982,7 +9923,7 @@ to access config and log files!
 
   def show_watchlist_manager(self):
     """Show the watchlist manager dialog."""
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Watchlist")
     dialog.geometry("760x400")
     dialog.transient(self.root)
@@ -8995,7 +9936,7 @@ to access config and log files!
     filter_row.pack(fill="x", pady=(0, 8))
     ttk.Label(filter_row, text="Filter:").pack(side="left")
     search_var = tk.StringVar()
-    ttk.Entry(filter_row, textvariable=search_var, width=30).pack(
+    self._create_entry(filter_row, textvariable=search_var, width=30).pack(
       side="left", padx=(6, 0)
     )
 
@@ -9058,9 +9999,9 @@ to access config and log files!
           "No Selection", "Select a name first.", parent=dialog
         )
         return
-      self.name_var.set(selected[0])
+      wname = selected[0]
       dialog.destroy()
-      self.send_open()
+      self.start_watchlist_auction(wname)
 
     def remove_selected():
       selected = tree.selection()
@@ -9077,19 +10018,19 @@ to access config and log files!
 
     button_row = ttk.Frame(frame)
     button_row.pack(fill="x", pady=(10, 0))
-    ttk.Button(button_row, text="Use Name", command=use_name).pack(side="left")
-    ttk.Button(button_row, text="Open Auction", command=open_auction).pack(
+    self._create_button(button_row, text="Use Name", command=use_name).pack(side="left")
+    self._create_button(button_row, text="Open Auction", command=open_auction).pack(
       side="left", padx=(8, 0)
     )
-    ttk.Button(
+    self._create_button(
       button_row, text="Remove Selected", command=remove_selected
     ).pack(side="left", padx=(8, 0))
-    ttk.Button(
+    self._create_button(
       button_row,
       text="Refresh",
       command=lambda: refresh_tree(search_var.get()),
     ).pack(side="left", padx=(8, 0))
-    ttk.Button(button_row, text="Close", command=dialog.destroy).pack(
+    self._create_button(button_row, text="Close", command=dialog.destroy).pack(
       side="right"
     )
 
@@ -9108,6 +10049,161 @@ to access config and log files!
       "watchlist_alert", name, message, level="info"
     )
     messagebox.showinfo("Watchlist Alert", message)
+
+  def _validate_bid_lockup_values(self, bid_amount, lockup_amount):
+    """Validate bid/lockup values used for queued watchlist bids."""
+    bid_text = str(bid_amount).strip()
+    lockup_text = str(lockup_amount).strip()
+
+    if not bid_text or not lockup_text:
+      return None, None, "Bid and lockup amounts are required."
+
+    try:
+      bid_value = float(bid_text)
+      lockup_value = float(lockup_text)
+    except ValueError:
+      return None, None, "Bid and lockup amounts must be numeric."
+
+    if bid_value <= 0 or lockup_value <= 0:
+      return None, None, "Bid and lockup amounts must be greater than zero."
+
+    if lockup_value < bid_value:
+      return None, None, "Lockup amount must be at least the bid amount."
+
+    return bid_text, lockup_text, None
+
+  def _prompt_watchlist_open_bid_options(self, name, parent=None):
+    """Prompt for optional BID/LOCKUP scheduling when opening from watchlist."""
+    parent_window = parent or self.root
+    response = messagebox.askyesnocancel(
+      "Start Auction from Watchlist",
+      f"Start auction for '{name}'?\n\n"
+      "Yes = OPEN and queue a BID/LOCKUP action when BIDDING starts\n"
+      "No = OPEN only\n"
+      "Cancel = Do nothing",
+      parent=parent_window,
+      icon="question",
+    )
+
+    if response is None:
+      return None
+
+    if response is False:
+      return {"queue_bid": False}
+
+    default_bid = self.bid_amount_var.get().strip()
+    default_lockup = self.lockup_amount_var.get().strip()
+
+    while True:
+      bid_amount = simpledialog.askstring(
+        "Queued Bid Amount",
+        f"Bid amount to place for '{name}' when BIDDING begins (FBC):",
+        initialvalue=default_bid,
+        parent=parent_window,
+      )
+      if bid_amount is None:
+        return None
+
+      lockup_amount = simpledialog.askstring(
+        "Queued Lockup Amount",
+        f"Lockup amount for '{name}' when BIDDING begins (FBC):",
+        initialvalue=default_lockup,
+        parent=parent_window,
+      )
+      if lockup_amount is None:
+        return None
+
+      bid_text, lockup_text, error = self._validate_bid_lockup_values(
+        bid_amount, lockup_amount
+      )
+      if not error:
+        break
+
+      messagebox.showwarning("Invalid Bid Setup", error, parent=parent_window)
+      default_bid = str(bid_amount).strip()
+      default_lockup = str(lockup_amount).strip()
+
+    add_to_automation = messagebox.askyesno(
+      "Add to Automation Cycle?",
+      f"After the queued BID is placed for '{name}', add it to the automation cycle\n"
+      "for REVEAL and REGISTER as well?",
+      parent=parent_window,
+      icon="question",
+    )
+
+    return {
+      "queue_bid": True,
+      "bid_amount": bid_text,
+      "lockup_amount": lockup_text,
+      "auto_enabled": add_to_automation,
+    }
+
+  def start_watchlist_auction(self, name):
+    """Start an auction from watchlist with optional queued BID/LOCKUP."""
+    wallet = self.wallet_name_var.get().strip()
+
+    if not wallet:
+      messagebox.showwarning(
+        "No Wallet Selected", "Select a wallet before starting an auction."
+      )
+      return
+
+    self.name_var.set(name)
+
+    if not self.check_node_running():
+      return
+
+    plan = self._prompt_watchlist_open_bid_options(name)
+    if plan is None:
+      return
+
+    if not plan.get("queue_bid"):
+      try:
+        txid = self._run_send_open(name, wallet)
+        messagebox.showinfo(
+          "Auction Opened", f"Auction opened for '{name}'!\nTXID: {txid}"
+        )
+      except Exception as e:
+        messagebox.showerror("Error", f"Failed to open auction: {e}")
+      return
+
+    bid_amount = str(plan["bid_amount"])
+    lockup_amount = str(plan["lockup_amount"])
+    auto_enabled = bool(plan["auto_enabled"])
+
+    self.bid_amount_var.set(bid_amount)
+    self.lockup_amount_var.set(lockup_amount)
+
+    job_id = self.add_auction_job(
+      name,
+      wallet,
+      bid_amount,
+      lockup_amount,
+      auto_enabled=auto_enabled,
+      auto_bid_enabled=True,
+    )
+
+    if not job_id:
+      messagebox.showerror("Error", "Failed to create queued auction job")
+      return
+
+    if self.execute_send_open(name, wallet, job_id):
+      cycle_text = (
+        "The auction remains in the automation cycle for REVEAL and REGISTER."
+        if auto_enabled
+        else "The queued job will stop after placing the BID unless you later enable automation."
+      )
+      messagebox.showinfo(
+        "Auction Opened - Bid Queued",
+        f"Auction opened for '{name}'.\n\n"
+        f"Queued BID: {bid_amount} FBC\n"
+        f"Queued LOCKUP: {lockup_amount} FBC\n\n"
+        "The BID will be sent automatically when the name enters BIDDING.\n"
+        f"{cycle_text}\n\n"
+        f"Job ID: {job_id[:8]}...",
+      )
+    else:
+      self.delete_job(job_id)
 
   def add_rollout_reminder(
     self, name, rollout_height, trigger_block, label, lead_blocks=0, mode="release"
@@ -9326,41 +10422,15 @@ to access config and log files!
     try:
       self.log(f"Opening auction for '{name}' (Job: {job_id[:8]}...)")
 
-      cmd, _ = self.get_fbdctl_command("--wallet", wallet, "sendopen", name)
-      result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        cwd=Path(self.fbd_path_var.get()).parent,
-        timeout=30,
-      )
+      txid = self._run_send_open(name, wallet)
 
-      if result.returncode == 0:
-        response = json.loads(result.stdout)
-        data = (
-          response.get("result", {})
-          if isinstance(response, dict)
-          else response
-        )
-        txid = data.get("txid", "N/A")
+      # Update job status
+      self.update_job_status(job_id, "opened", txid=txid)
 
-        # Update job status
-        self.update_job_status(job_id, "opened", txid=txid)
-
-        self.log(f"[OK] Auction opened for '{name}': {txid[:12]}...")
-        # Stage 4: Notify opened
-        self.notification_manager.notify_opened(name, job_id, txid)
-        return True
-      else:
-        error_msg = result.stderr
-        self.log(f"[OK]- Failed to open auction for '{name}': {error_msg}")
-        self.update_job_status(job_id, "failed", error=error_msg)
-        # Stage 4: Notify failure
-        self.notification_manager.notify_failed(name, job_id, error_msg)
-        messagebox.showerror(
-          "Open Failed", f"Failed to open auction:\n{error_msg}"
-        )
-        return False
+      self.log(f"[OK] Auction opened for '{name}': {txid[:12]}...")
+      # Stage 4: Notify opened
+      self.notification_manager.notify_opened(name, job_id, txid)
+      return True
 
     except Exception as e:
       error_msg = str(e)
@@ -9953,7 +11023,7 @@ to access config and log files!
         self.manual_import_name_dialog(wallet)
       else: # Cancel - show log
         # Switch to Node & Mining tab to show log
-        self.notebook.select(0)
+        self._notebook_select(0)
         self.log("=== SCAN RESULTS ===")
         self.log(f"No auctions found in wallet '{wallet}'.")
         self.log("Check the scan details above.")
@@ -10021,7 +11091,7 @@ to access config and log files!
           f"No active auctions found in any of the {len(wallets)} wallet(s).\n\n"
           "Check the log for details about each wallet.",
         )
-        self.notebook.select(0) # Switch to log tab
+        self._notebook_select(0) # Switch to log tab
         return
 
       # Show all found auctions
@@ -10037,7 +11107,7 @@ to access config and log files!
     """
     Dialog to manually specify a name to import (when scan fails to find it)
     """
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title("Manual Import - Enter Name")
     dialog.geometry("500x250")
     dialog.transient(self.root)
@@ -10068,7 +11138,7 @@ to access config and log files!
       side="left", padx=(0, 10)
     )
     name_var = tk.StringVar()
-    name_entry = ttk.Entry(
+    name_entry = self._create_entry(
       entry_frame, textvariable=name_var, width=30, font=("Arial", 10)
     )
     name_entry.pack(side="left", fill="x", expand=True)
@@ -10082,10 +11152,10 @@ to access config and log files!
       """Import name."""
       name = name_var.get().strip()
       if not name:
-        status_label.config(text="[!] Please enter a name", foreground="red")
+        status_label.configure(text="[!] Please enter a name", foreground="red")
         return
 
-      status_label.config(text=f"[ ] Checking '{name}'...", foreground="blue")
+      status_label.configure(text=f"[ ] Checking '{name}'...", foreground="blue")
       dialog.update()
 
       try:
@@ -10112,7 +11182,7 @@ to access config and log files!
             f"Could not find name '{name}' on the blockchain.\n\n"
             "Please check the spelling and try again.",
           )
-          status_label.config(text="", foreground="blue")
+          status_label.configure(text="", foreground="blue")
           return
 
         state = name_info.get("state", "UNKNOWN")
@@ -10123,7 +11193,7 @@ to access config and log files!
             f"Name '{name}' is in state '{state}'.\n\n"
             "Only BIDDING, REVEAL, or CLOSED auctions can be imported.",
           )
-          status_label.config(text="", foreground="blue")
+          status_label.configure(text="", foreground="blue")
           return
 
         # Get bids
@@ -10166,23 +11236,23 @@ to access config and log files!
               "Import Failed",
               f"Failed to import '{name}'. Check logs for details.",
             )
-            status_label.config(text="", foreground="blue")
+            status_label.configure(text="", foreground="blue")
         else:
           dialog.destroy()
 
       except Exception as e:
         self.log(f"Error in manual import: {e}")
         messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
-        status_label.config(text="", foreground="blue")
+        status_label.configure(text="", foreground="blue")
 
     # Buttons
     button_frame = ttk.Frame(dialog)
     button_frame.pack(pady=15)
 
-    ttk.Button(button_frame, text="Import", command=import_name).pack(
+    self._create_button(button_frame, text="Import", command=import_name).pack(
       side="left", padx=5
     )
-    ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(
+    self._create_button(button_frame, text="Cancel", command=dialog.destroy).pack(
       side="left", padx=5
     )
 
@@ -10194,7 +11264,7 @@ to access config and log files!
     Display dialog to select which auctions to import
     Provides agentic recommendations based on state
     """
-    dialog = tk.Toplevel(self.root)
+    dialog = self._create_toplevel()
     dialog.title(f"Import Auctions - Found {len(auctions)}")
     dialog.geometry("900x600")
     dialog.transient(self.root)
@@ -10315,16 +11385,16 @@ to access config and log files!
 
       dialog.destroy()
 
-    ttk.Button(button_frame, text="Select All", command=select_all).pack(
+    self._create_button(button_frame, text="Select All", command=select_all).pack(
       side="left", padx=5
     )
-    ttk.Button(button_frame, text="Deselect All", command=deselect_all).pack(
+    self._create_button(button_frame, text="Deselect All", command=deselect_all).pack(
       side="left", padx=5
     )
-    ttk.Button(button_frame, text="Import Selected", command=import_selected).pack(
+    self._create_button(button_frame, text="Import Selected", command=import_selected).pack(
       side="right", padx=5
     )
-    ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(
+    self._create_button(button_frame, text="Cancel", command=dialog.destroy).pack(
       side="right", padx=5
     )
 
@@ -10617,7 +11687,13 @@ to access config and log files!
       return False
 
   def add_auction_job(
-    self, name, wallet, bid_amount, lockup_amount, auto_enabled=True
+    self,
+    name,
+    wallet,
+    bid_amount,
+    lockup_amount,
+    auto_enabled=True,
+    auto_bid_enabled=None,
   ):
     """
     Create a new auction automation job
@@ -10628,12 +11704,16 @@ to access config and log files!
       bid_amount: Bid amount in FBC
       lockup_amount: Lockup amount in FBC
       auto_enabled: Whether automation is enabled
+      auto_bid_enabled: Whether BID should be placed automatically when BIDDING starts
 
     Returns:
       str: Job ID if successful, None otherwise
     """
     try:
       jobs_data = self.load_auction_jobs()
+
+      if auto_bid_enabled is None:
+        auto_bid_enabled = auto_enabled
 
       # Generate unique job ID
       job_id = str(uuid.uuid4())
@@ -10648,6 +11728,7 @@ to access config and log files!
         "lockup_amount": str(lockup_amount),
         "status": "pending_open", # pending_open, opened, bid_placed, revealed, registered, lost, failed
         "auto_enabled": auto_enabled,
+        "auto_bid_enabled": auto_bid_enabled,
         "created": datetime.now().isoformat(),
         "created_at": int(time.time()),
         "txids": {"open": None, "bid": None, "reveal": [], "register": None},
@@ -10810,8 +11891,19 @@ to access config and log files!
 
 
 def main():
-  """Main."""
-  root = tk.Tk()
+  """Launch the GUI with the configured toolkit, falling back to ttk if needed."""
+  toolkit_mode = _resolve_startup_ui_toolkit()
+  if toolkit_mode == UI_TOOLKIT_CUSTOMTK and ctk is not None:
+    root = ctk.CTk()
+  else:
+    root = tk.Tk()
+    if toolkit_mode == UI_TOOLKIT_CUSTOMTK and ctk is None:
+      print(
+        "[!] CustomTkinter mode requested, but customtkinter is not installed. "
+        "Falling back to Legacy ttk."
+      )
+
+  root._ui_toolkit_mode = toolkit_mode if toolkit_mode in SUPPORTED_UI_TOOLKITS else UI_TOOLKIT_TTK
   app = FBDManager(root)
   root.protocol("WM_DELETE_WINDOW", app.on_closing)
   root.mainloop()
@@ -10819,3 +11911,11 @@ def main():
 
 if __name__ == "__main__":
   main()
+
+
+
+
+
+
+
+

@@ -15,123 +15,448 @@ import os
 import sys
 import subprocess
 import signal
+import json
+import importlib
+import shlex
+import shutil
+import site
+
+
+def _optional_customtkinter_prompt_config_path():
+  """Return the config path used to persist startup prompt state."""
+  return os.path.expanduser("~/.fbdgui/fbdgui_config.json")
+
+
+def _optional_customtkinter_prompt_seen():
+  """Return True when the startup CustomTkinter prompt was already shown."""
+  config_path = _optional_customtkinter_prompt_config_path()
+  try:
+    if not os.path.exists(config_path):
+      return False
+    with open(config_path, "r", encoding="utf-8") as handle:
+      config = json.load(handle)
+    return bool(config.get("customtkinter_startup_prompt_seen", False))
+  except Exception:
+    return False
+
+
+def _mark_optional_customtkinter_prompt_seen():
+  """Persist that the startup CustomTkinter prompt has already been shown."""
+  config_path = _optional_customtkinter_prompt_config_path()
+  config_dir = os.path.dirname(config_path)
+  try:
+    os.makedirs(config_dir, exist_ok=True)
+    config = {}
+    if os.path.exists(config_path):
+      with open(config_path, "r", encoding="utf-8") as handle:
+        loaded_config = json.load(handle)
+      if isinstance(loaded_config, dict):
+        config = loaded_config
+    config["customtkinter_startup_prompt_seen"] = True
+    with open(config_path, "w", encoding="utf-8") as handle:
+      json.dump(config, handle, indent=2)
+  except Exception:
+    pass
+
+
+def _is_wsl_environment():
+  """Return True when running inside Windows Subsystem for Linux."""
+  if not sys.platform.startswith("linux"):
+    return False
+
+  try:
+    with open("/proc/sys/kernel/osrelease", "r", encoding="utf-8") as handle:
+      release = handle.read().lower()
+  except OSError:
+    release = ""
+
+  return "microsoft" in release or "wsl" in release
+
+
+def _python_runtime_label():
+  """Return a short human-readable description of the active Python runtime."""
+  if _is_wsl_environment():
+    return "WSL Python"
+  if sys.platform.startswith("linux"):
+    return "native Linux Python"
+  if sys.platform == "win32":
+    return "Windows Python"
+  return sys.platform
+
+
+def _has_root_privileges():
+  """Return True when the current process already has root privileges."""
+  geteuid = getattr(os, "geteuid", None)
+  return bool(geteuid is not None and geteuid() == 0)
+
+
+def _can_use_interactive_sudo():
+  """Return True when sudo can prompt on a real terminal."""
+  return bool(
+    sys.platform.startswith("linux")
+    and shutil.which("sudo")
+    and sys.stdin.isatty()
+    and sys.stdout.isatty()
+  )
+
+
+def _format_shell_command(command):
+  """Format a subprocess argument list as a shell-ready command string."""
+  return shlex.join(command)
+
+
+def _refresh_python_import_paths(package_name=None):
+  """Refresh import caches and add common site-packages paths to sys.path."""
+  candidate_paths = []
+
+  try:
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+      candidate_paths.append(user_site)
+    else:
+      candidate_paths.extend(user_site)
+  except Exception:
+    pass
+
+  try:
+    candidate_paths.extend(site.getsitepackages())
+  except Exception:
+    pass
+
+  for path in candidate_paths:
+    if path and os.path.isdir(path) and path not in sys.path:
+      sys.path.append(path)
+
+  if package_name:
+    try:
+      show_result = subprocess.run(
+        [sys.executable, "-m", "pip", "show", package_name],
+        capture_output=True,
+        text=True,
+      )
+      if show_result.returncode == 0:
+        for line in show_result.stdout.splitlines():
+          if line.startswith("Location:"):
+            location = line.split(":", 1)[1].strip()
+            if location and os.path.isdir(location) and location not in sys.path:
+              sys.path.append(location)
+            break
+    except Exception:
+      pass
+
+  importlib.invalidate_caches()
+
+
+def _get_optional_python_install_guidance(packages):
+  """Return manual install guidance for optional Python packages."""
+  guidance_lines = [
+    f"Runtime detected: {_python_runtime_label()}",
+    f"Try user install first: {_format_shell_command([sys.executable, '-m', 'pip', 'install', '--user', *packages])}",
+    (
+      "If pip reports an externally-managed environment, retry with: "
+      f"{_format_shell_command([sys.executable, '-m', 'pip', 'install', '--user', '--break-system-packages', *packages])}"
+    ),
+  ]
+
+  if sys.platform.startswith("linux"):
+    guidance_lines.append(
+      "If the selected Python is system-managed and user install still fails, try: "
+      f"{_format_shell_command(['sudo', '-E', sys.executable, '-m', 'pip', 'install', *packages])}"
+    )
+    if _is_wsl_environment():
+      guidance_lines.append(
+        "When running under WSL, run the command inside the Linux distro terminal. "
+        "Windows PowerShell sudo does not apply to the Linux Python environment."
+      )
+
+  if sys.platform == "win32":
+    guidance_lines.append(
+      "Windows Python does not use sudo; run pip from the selected environment or an elevated PowerShell if needed."
+    )
+
+  return "\n".join(guidance_lines)
+
+
+def _install_optional_python_packages(packages):
+  """Install optional Python packages with Linux/WSL-aware fallbacks."""
+  pip_base = [sys.executable, "-m", "pip", "install"]
+  in_virtualenv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+  attempts = []
+
+  if in_virtualenv:
+    attempts.append(("virtualenv pip", [*pip_base, *packages], False))
+  else:
+    attempts.extend(
+      [
+        ("pip --user", [*pip_base, "--user", *packages], False),
+        (
+          "pip --user --break-system-packages",
+          [*pip_base, "--user", "--break-system-packages", *packages],
+          False,
+        ),
+        ("pip install", [*pip_base, *packages], False),
+        (
+          "pip install --break-system-packages",
+          [*pip_base, "--break-system-packages", *packages],
+          False,
+        ),
+      ]
+    )
+
+  if sys.platform.startswith("linux") and not _has_root_privileges() and shutil.which("sudo"):
+    attempts.extend(
+      [
+        (
+          "sudo pip install",
+          ["sudo", "-E", sys.executable, "-m", "pip", "install", *packages],
+          True,
+        ),
+        (
+          "sudo pip install --break-system-packages",
+          [
+            "sudo",
+            "-E",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--break-system-packages",
+            *packages,
+          ],
+          True,
+        ),
+      ]
+    )
+
+  seen_commands = set()
+  failure_notes = []
+
+  for label, command, requires_terminal in attempts:
+    command_key = tuple(command)
+    if command_key in seen_commands:
+      continue
+    seen_commands.add(command_key)
+
+    if requires_terminal and not _can_use_interactive_sudo():
+      failure_notes.append(
+        f"{label}: skipped because no interactive Linux terminal is available for sudo."
+      )
+      continue
+
+    try:
+      if requires_terminal:
+        result = subprocess.run(command, text=True)
+        details = f"command exited with status {result.returncode}"
+      else:
+        result = subprocess.run(command, capture_output=True, text=True)
+        details = result.stderr.strip() or result.stdout.strip() or (
+          f"command exited with status {result.returncode}"
+        )
+    except Exception as exc:
+      failure_notes.append(f"{label}: {exc}")
+      continue
+
+    if result.returncode == 0:
+      _refresh_python_import_paths(packages[0] if packages else None)
+      return True, f"Installed via {label}: {_format_shell_command(command)}"
+
+    failure_notes.append(f"{label}: {details}")
+
+  return False, "\n".join(failure_notes[-6:])
 
 
 def check_and_install_dependencies():
-  """Check for required Python packages and offer to install if missing"""
-  missing_packages = []
-  install_commands = {}
+  """Install required dependencies and optionally offer CustomTkinter."""
+  required_missing_packages = []
+  optional_missing_packages = []
+  system_packages = {}
+  optional_pip_packages = []
 
   # Check for tkinter
   try:
     import tkinter
   except ImportError:
-    missing_packages.append("tkinter")
-    install_commands["tkinter"] = "python3-tk"
+    required_missing_packages.append("tkinter")
+    system_packages["tkinter"] = "python3-tk"
 
   # Check for requests
   try:
     import requests
   except ImportError:
-    missing_packages.append("requests")
-    install_commands["requests"] = "python3-requests"
+    required_missing_packages.append("requests")
+    system_packages["requests"] = "python3-requests"
 
-  if not missing_packages:
+  # Check for customtkinter (optional: only needed for rounded UI toolkit mode)
+  try:
+    import customtkinter
+  except ImportError:
+    optional_missing_packages.append("customtkinter")
+    optional_pip_packages.append("customtkinter")
+
+  if not required_missing_packages and not optional_missing_packages:
     return True # All dependencies satisfied
 
   # Determine package manager
   pkg_manager = None
-  install_cmd_template = None
 
   if os.path.exists("/usr/bin/apt") or os.path.exists("/usr/bin/apt-get"):
     pkg_manager = "apt"
-    install_cmd_template = "sudo apt update && sudo apt install -y {packages}"
   elif os.path.exists("/usr/bin/dnf"):
     pkg_manager = "dnf"
-    install_cmd_template = "sudo dnf install -y {packages}"
   elif os.path.exists("/usr/bin/yum"):
     pkg_manager = "yum"
-    install_cmd_template = "sudo yum install -y {packages}"
   elif os.path.exists("/usr/bin/pacman"):
     pkg_manager = "pacman"
     # Pacman package names might differ
-    install_commands["tkinter"] = "tk"
-    install_commands["requests"] = "python-requests"
-    install_cmd_template = "sudo pacman -S --noconfirm {packages}"
+    if "tkinter" in system_packages:
+      system_packages["tkinter"] = "tk"
+    if "requests" in system_packages:
+      system_packages["requests"] = "python-requests"
 
-  # Build package list
-  if pkg_manager in ["apt", "dnf", "yum"]:
-    packages_to_install = " ".join(install_commands.values())
-  else:
-    packages_to_install = " ".join(install_commands.values())
+  system_package_list = list(system_packages.values())
 
-  # Display error and offer to install
-  print("\n" + "=" * 70)
-  print("[!] MISSING DEPENDENCIES")
-  print("=" * 70)
-  print(f"\nThe following Python packages are required but not installed:")
-  for pkg in missing_packages:
-    print(f" * {pkg}")
+  if required_missing_packages:
+    print("\n" + "=" * 70)
+    print("[!] MISSING REQUIRED DEPENDENCIES")
+    print("=" * 70)
+    print("\nThe following packages are required for the base app:")
+    for pkg in required_missing_packages:
+      print(f" * {pkg}")
 
-  if pkg_manager:
-    install_cmd = install_cmd_template.format(packages=packages_to_install)
-    print(f"\n[*][|] Detected package manager: {pkg_manager}")
-    print(f"\n[*][SECT] Install command:\n  {install_cmd}")
+    if system_package_list and pkg_manager:
+      print(f"\n[*][|] Detected package manager: {pkg_manager}")
+      if pkg_manager == "apt":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo apt update && sudo apt install -y {' '.join(system_package_list)}"
+        )
+      elif pkg_manager == "dnf":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo dnf install -y {' '.join(system_package_list)}"
+        )
+      elif pkg_manager == "yum":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo yum install -y {' '.join(system_package_list)}"
+        )
+      elif pkg_manager == "pacman":
+        print(
+          "\n[*][SECT] Install system packages:\n"
+          f"  sudo pacman -S --noconfirm {' '.join(system_package_list)}"
+        )
+    else:
+      print("\n[!] Could not detect package manager for required system packages.")
+      print("Please install them manually and restart the application.")
+      print("=" * 70 + "\n")
+      sys.exit(1)
 
-    # Ask if user wants to auto-install
     try:
       response = (
-        input("\nWould you like to install these packages now? [Y/n]: ")
+        input("\nInstall required dependencies now? [Y/n]: ")
         .strip()
         .lower()
       )
-      if response in ["", "y", "yes"]:
-        print(f"\n[*] Installing packages with {pkg_manager}...")
-        if pkg_manager == "apt":
-          # Run apt update first
-          result = subprocess.run(
-            ["sudo", "apt", "update"], capture_output=True, text=True
-          )
-          if result.returncode != 0:
-            print(f"[!] apt update failed: {result.stderr}")
-
-        # Install packages
-        result = subprocess.run(
-          install_cmd.split(), capture_output=True, text=True
-        )
-
-        if result.returncode == 0:
-          print("[OK] Installation successful!")
-          print("\n[*] Please restart the application:")
-          print("  python3 fbd_wslgui.py")
-          print("=" * 70 + "\n")
-          sys.exit(0)
-        else:
-          print(f"\n[X] Installation failed!")
-          print(f"Error: {result.stderr}")
-
     except KeyboardInterrupt:
       print("\n\n[!] Installation cancelled by user.")
-  else:
-    print("\n[!] Could not detect package manager.")
-    print("Please install the required packages manually.")
+      sys.exit(1)
 
-  # Manual installation instructions
-  print("\n" + "=" * 70)
-  print("[*]< MANUAL INSTALLATION INSTRUCTIONS")
-  print("=" * 70)
-  print("\nUbuntu / Debian:")
-  print("  sudo apt update && sudo apt install -y python3-tk python3-requests")
-  print("\nFedora / RHEL / CentOS:")
-  print("  sudo dnf install -y python3-tkinter python3-requests")
-  print("\nArch Linux:")
-  print("  sudo pacman -S tk python-requests")
-  print("\nOther distributions:")
-  print("  pip3 install requests")
-  print("  (tkinter package name varies - search for python3-tk or python-tkinter)")
-  print("=" * 70 + "\n")
+    if response not in ["", "y", "yes"]:
+      print("\n[!] Required packages were not installed.")
+      print("Please install them manually and restart the application.")
+      print("=" * 70 + "\n")
+      sys.exit(1)
 
-  sys.exit(1)
+    print(f"\n[*] Installing required system packages with {pkg_manager}...")
+    if pkg_manager == "apt":
+      result = subprocess.run(
+        ["sudo", "apt", "update"], capture_output=True, text=True
+      )
+      if result.returncode != 0:
+        print(f"[!] apt update failed: {result.stderr}")
+
+      result = subprocess.run(
+        ["sudo", "apt", "install", "-y", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+    elif pkg_manager == "dnf":
+      result = subprocess.run(
+        ["sudo", "dnf", "install", "-y", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+    elif pkg_manager == "yum":
+      result = subprocess.run(
+        ["sudo", "yum", "install", "-y", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+    else:
+      result = subprocess.run(
+        ["sudo", "pacman", "-S", "--noconfirm", *system_package_list],
+        capture_output=True,
+        text=True,
+      )
+
+    if result.returncode != 0:
+      print("\n[X] System package installation failed!")
+      print(f"Error: {result.stderr}")
+      sys.exit(1)
+
+    try:
+      import tkinter # noqa: F401
+      import requests # noqa: F401
+      print("[OK] Required dependencies installed successfully.")
+    except Exception as e:
+      print("\n[X] Required dependency validation failed!")
+      print(f"Error: {e}")
+      sys.exit(1)
+
+  if optional_missing_packages and not _optional_customtkinter_prompt_seen():
+    print("\n" + "=" * 70)
+    print("[i] OPTIONAL ROUNDED UI DEPENDENCY")
+    print("=" * 70)
+    print("\nCustomTkinter is optional and only needed for the rounded toolkit.")
+    print("Legacy ttk mode, including Light/Dark/System themes, works without it.")
+    print("\n[*][SECT] Optional Python package guidance:")
+    print(_get_optional_python_install_guidance(optional_pip_packages))
+
+    try:
+      response = (
+        input("\nInstall optional rounded UI dependency now? [y/N]: ")
+        .strip()
+        .lower()
+      )
+    except KeyboardInterrupt:
+      response = "n"
+      print("\n\n[i] Optional dependency installation skipped.")
+
+    _mark_optional_customtkinter_prompt_seen()
+
+    if response in ["y", "yes"]:
+      print(
+        "\n[*] Installing optional Python package with Linux/WSL-aware pip fallbacks..."
+      )
+      success, details = _install_optional_python_packages(optional_pip_packages)
+      if success:
+        try:
+          _refresh_python_import_paths("customtkinter")
+          import customtkinter # noqa: F401
+          print("[OK] Optional CustomTkinter dependency installed.")
+        except Exception as e:
+          print("\n[!] CustomTkinter installed but import validation failed.")
+          print(f"Error: {e}")
+          print("Continuing with Legacy ttk mode.")
+      else:
+        print("\n[!] Optional dependency installation failed.")
+        print(f"Error: {details}")
+        print(_get_optional_python_install_guidance(optional_pip_packages))
+        print("Continuing with Legacy ttk mode.")
+    else:
+      print("\n[i] Continuing with Legacy ttk mode.")
+
+  return True
 
 
 # Run dependency check before imports
@@ -1496,6 +1821,16 @@ class FBDManager:
     self.create_block_calc_tab()
     self.create_settings_tab()
 
+    # Track tab switches so we can warn about unsaved settings changes.
+    self._active_tab_name = self._get_current_tab_name()
+    if self.customtkinter_active:
+      try:
+        self.notebook.configure(command=self._on_ctk_tab_changed)
+      except Exception:
+        pass
+    else:
+      self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
+
   def _add_notebook_tab(self, name):
     """Add a tab and return its container frame (works for both ttk and CTK)."""
     if self.customtkinter_active:
@@ -1517,6 +1852,77 @@ class FBDManager:
         self.notebook.set(tab_or_index)
     else:
       self.notebook.select(tab_or_index)
+
+  def _get_current_tab_name(self):
+    """Return the currently selected tab name for ttk and CTK notebooks."""
+    try:
+      if self.customtkinter_active:
+        return self.notebook.get()
+      selected = self.notebook.select()
+      return self.notebook.tab(selected, "text")
+    except Exception:
+      return ""
+
+  def _collect_non_email_settings_state(self):
+    """Snapshot settings-tab values that should trigger save reminders."""
+
+    def _get_var(name, default=""):
+      var = getattr(self, name, None)
+      if var is None:
+        return default
+      try:
+        return var.get()
+      except Exception:
+        return default
+
+    return {
+      "profile": _get_var("profile_var", "default"),
+      "theme_mode": _get_var("theme_mode_var", "system"),
+      "ui_toolkit": _get_var("ui_toolkit_var", UI_TOOLKIT_TTK),
+      "fbd_path": _get_var("fbd_path_var", "./fbd"),
+      "rpc_host": _get_var("rpc_host_var", "127.0.0.1"),
+      "rpc_port": _get_var("rpc_port_var", "32869"),
+      "custom_datadir": _get_var("custom_datadir_var", ""),
+      "custom_dns_port": _get_var("custom_dns_port_var", ""),
+      "miner_download_url": _get_var("miner_download_url_var", ""),
+      "fbd_download_url": _get_var("fbd_download_url_var", ""),
+      "auto_restart": bool(_get_var("auto_restart_var", False)),
+      "restart_delay": _get_var("restart_delay_var", "3"),
+    }
+
+  def _update_settings_saved_snapshot(self):
+    """Record the latest saved settings snapshot for leave-tab reminders."""
+    self._settings_saved_snapshot = self._collect_non_email_settings_state()
+
+  def _settings_have_unsaved_non_email_changes(self):
+    """Check whether settings-tab values changed since last save/load/reset."""
+    current = self._collect_non_email_settings_state()
+    previous = getattr(self, "_settings_saved_snapshot", current)
+    return current != previous
+
+  def _prompt_save_settings_on_leave(self):
+    """Offer saving when leaving Settings tab with unsaved non-email changes."""
+    if not self._settings_have_unsaved_non_email_changes():
+      return
+
+    save_now = messagebox.askyesno(
+      "Unsaved Settings",
+      "You changed settings in this tab.\n\nSave settings now?",
+    )
+    if save_now:
+      self.save_settings()
+
+  def _on_notebook_tab_changed(self, _event=None):
+    """Handle tab changes and warn about unsaved settings when leaving Settings."""
+    new_tab = self._get_current_tab_name()
+    old_tab = getattr(self, "_active_tab_name", "")
+    if old_tab == "Settings" and new_tab != "Settings":
+      self._prompt_save_settings_on_leave()
+    self._active_tab_name = new_tab
+
+  def _on_ctk_tab_changed(self, _tab_name=None):
+    """Bridge CTK tab-change callback into shared change handler."""
+    self._on_notebook_tab_changed()
 
   def _create_scrollable_frame(self, parent):
     """Create scrollable content frame."""
@@ -1956,8 +2362,35 @@ class FBDManager:
 
     self._apply_theme_to_tk_widgets(self.root, palette)
 
+  def install_optional_customtkinter(self):
+    """Install CustomTkinter so the rounded UI toolkit can be enabled."""
+    self.log(
+      f"Installing optional CustomTkinter dependency for {_python_runtime_label()}..."
+    )
+    success, details = _install_optional_python_packages(["customtkinter"])
+    if not success:
+      guidance = _get_optional_python_install_guidance(["customtkinter"])
+      self.log(f"CustomTkinter install failed: {details}", "error")
+      self.log(guidance, "error")
+      return False, f"{details}\n\n{guidance}"
+
+    try:
+      global ctk
+      _refresh_python_import_paths("customtkinter")
+      import customtkinter as imported_ctk
+
+      ctk = imported_ctk
+      _mark_optional_customtkinter_prompt_seen()
+    except Exception as e:
+      details = str(e)
+      self.log(f"CustomTkinter import failed after install: {details}", "error")
+      return False, details
+
+    self.log("Optional CustomTkinter dependency installed successfully.")
+    return True, ""
+
   def on_ui_toolkit_changed(self, _event=None):
-    """Persist UI toolkit choice and prompt restart to apply it."""
+    """Handle toolkit selection, including optional install and restart flow."""
     selected_label = (self.ui_toolkit_choice_var.get() or "").strip()
     selected_mode = self.ui_toolkit_label_to_mode.get(selected_label, UI_TOOLKIT_TTK)
     selected_mode = _normalize_ui_toolkit(selected_mode) or UI_TOOLKIT_TTK
@@ -1967,15 +2400,28 @@ class FBDManager:
       return
 
     if selected_mode == UI_TOOLKIT_CUSTOMTK and ctk is None:
-      messagebox.showwarning(
+      install_now = messagebox.askyesno(
         "CustomTkinter Not Installed",
-        "Install CustomTkinter first:\n\n"
-        "  pip install customtkinter\n\n"
-        "Keeping Legacy ttk mode.",
+        "Rounded CustomTkinter mode needs the optional customtkinter package.\n\n"
+        "Legacy ttk mode, including Light/Dark/System themes, works without it.\n\n"
+        "Install CustomTkinter now?",
       )
-      self.ui_toolkit_var.set(UI_TOOLKIT_TTK)
-      self.ui_toolkit_choice_var.set(self.ui_toolkit_labels[UI_TOOLKIT_TTK])
-      return
+      if not install_now:
+        self.ui_toolkit_var.set(UI_TOOLKIT_TTK)
+        self.ui_toolkit_choice_var.set(self.ui_toolkit_labels[UI_TOOLKIT_TTK])
+        return
+
+      success, details = self.install_optional_customtkinter()
+      if not success:
+        messagebox.showerror(
+          "CustomTkinter Install Failed",
+          "Could not install customtkinter automatically.\n\n"
+          f"Error: {details}\n\n"
+          "Keeping Legacy ttk mode.",
+        )
+        self.ui_toolkit_var.set(UI_TOOLKIT_TTK)
+        self.ui_toolkit_choice_var.set(self.ui_toolkit_labels[UI_TOOLKIT_TTK])
+        return
 
     self.ui_toolkit_mode = selected_mode
     self.save_config()
@@ -2678,8 +3124,9 @@ class FBDManager:
       font=("Arial", 8, "italic"),
       foreground="#666",
     ).grid(row=0, column=2, sticky="w", padx=(5, 0))
+    bid_entry_width = 120 if self.customtkinter_active else 12
     self.bid_amount_var = tk.StringVar()
-    self._create_entry(bid_frame, textvariable=self.bid_amount_var, width=20).grid(
+    self._create_entry(bid_frame, textvariable=self.bid_amount_var, width=bid_entry_width).grid(
       row=0, column=1, sticky="w", pady=2
     )
 
@@ -2693,7 +3140,7 @@ class FBDManager:
       foreground="#666",
     ).grid(row=1, column=2, sticky="w", padx=(5, 0))
     self.lockup_amount_var = tk.StringVar()
-    self._create_entry(bid_frame, textvariable=self.lockup_amount_var, width=20).grid(
+    self._create_entry(bid_frame, textvariable=self.lockup_amount_var, width=bid_entry_width).grid(
       row=1, column=1, sticky="w", pady=2
     )
 
@@ -3712,6 +4159,19 @@ class FBDManager:
     self._bind_canvas_mousewheel(canvas, tab)
 
     # Now use scrollable_frame instead of tab for all content
+    settings_actions = self._create_inline_frame(scrollable_frame)
+    settings_actions.pack(fill="x", padx=10, pady=(10, 5))
+
+    self._create_button(
+      settings_actions, text="Save All Settings", command=self.save_settings
+    ).pack(side="left", padx=5)
+    self._create_button(
+      settings_actions, text="Load Settings", command=self.load_settings_file
+    ).pack(side="left", padx=5)
+    self._create_button(
+      settings_actions, text="Reset to Defaults", command=self.reset_defaults
+    ).pack(side="left", padx=5)
+
     # Configuration Profiles
     profile_outer, profile_frame = self._create_section_frame(
       scrollable_frame, "Configuration Profiles", padding=10
@@ -4103,20 +4563,6 @@ class FBDManager:
     ).grid(row=8, column=0, columnspan=3, sticky="w")
 
     email_frame.columnconfigure(1, weight=1)
-
-    # Save/Load buttons
-    button_frame = self._create_inline_frame(scrollable_frame)
-    button_frame.pack(fill="x", padx=10, pady=20)
-
-    self._create_button(
-      button_frame, text="Save All Settings", command=self.save_settings
-    ).pack(side="left", padx=5)
-    self._create_button(
-      button_frame, text="Load Settings", command=self.load_settings_file
-    ).pack(side="left", padx=5)
-    self._create_button(
-      button_frame, text="Reset to Defaults", command=self.reset_defaults
-    ).pack(side="left", padx=5)
 
   def toggle_mining_options(self):
     """Enable/disable mining options based on checkbox"""
@@ -7465,10 +7911,12 @@ class FBDManager:
 
     self.toggle_mining_options()
     self.apply_theme()
+    self._update_settings_saved_snapshot()
 
   def save_settings(self):
     """Save current settings"""
     if self.save_config():
+      self._update_settings_saved_snapshot()
       messagebox.showinfo("Success", "Settings saved successfully!")
       self.log("Settings saved")
     else:
