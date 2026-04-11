@@ -274,18 +274,19 @@ set WSL_DISPLAY=:0
 
 REM Get the directory where this script is located (Windows path)
 set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
-REM Convert Windows path to WSL path
-for /f "tokens=*" %%i in ('wsl wslpath -u "%SCRIPT_DIR%"') do set "WSL_PATH=%%i"
-
-REM Try with default Ubuntu, fallback to no distribution name if fails
-wsl -d Ubuntu -e bash -c "cd '%WSL_PATH%' && python3 -u fbd_wslgui.test.py" 2>&1
-if %errorlevel% neq 0 (
-    echo.
-    echo [!] Ubuntu distribution not found, trying default WSL...
-    echo.
-    wsl -e bash -c "cd '%WSL_PATH%' && python3 -u fbd_wslgui.test.py" 2>&1
+REM Convert Windows path to WSL path (without calling wslpath)
+set "SCRIPT_DIR_SLASH=%SCRIPT_DIR:\=/%"
+set "DRIVE_LETTER=%SCRIPT_DIR_SLASH:~0,1%"
+for %%A in (a b c d e f g h i j k l m n o p q r s t u v w x y z) do (
+    if /I "%DRIVE_LETTER%"=="%%A" set "DRIVE_LETTER=%%A"
 )
+set "PATH_REST=%SCRIPT_DIR_SLASH:~2%"
+set "WSL_PATH=/mnt/%DRIVE_LETTER%%PATH_REST%"
+
+REM Launch in default WSL distro (venv is used when present)
+wsl -e bash -c "cd $1 && if [ -f .venv-wslgui/bin/activate ]; then . .venv-wslgui/bin/activate; fi && python3 -u fbd_wslgui.test.py" _ "%WSL_PATH%" 2>&1
 
 echo.
 echo GUI closed.

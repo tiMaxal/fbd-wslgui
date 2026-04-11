@@ -1214,6 +1214,16 @@ class FBDManager:
     # Configuration
     self.config_file = Path.home() / ".fbdgui" / "fbdgui_config.json"
     self.config = self.load_config()
+    self.theme_mode_labels = {
+      "system": "Same as system",
+      "dark": "Dark",
+      "light": "Light",
+    }
+    self.theme_label_to_mode = {
+      label: mode for mode, label in self.theme_mode_labels.items()
+    }
+    self.theme_mode_var = tk.StringVar(value="system")
+    self.theme_choice_var = tk.StringVar(value=self.theme_mode_labels["system"])
 
     # Setup log file
     self.log_file = Path.home() / ".fbdgui" / "fbdgui_test.log"
@@ -1447,6 +1457,216 @@ class FBDManager:
     for widget in (tab_widget, canvas):
       widget.bind("<Enter>", _bind)
       widget.bind("<Leave>", _unbind)
+
+  def _get_effective_theme_mode(self):
+    """Resolve configured mode to an effective light or dark mode."""
+    mode = "system"
+    if hasattr(self, "theme_mode_var"):
+      mode = (self.theme_mode_var.get() or "system").strip().lower()
+    if mode not in ("system", "dark", "light"):
+      mode = "system"
+
+    if mode == "system":
+      try:
+        red, green, blue = self.root.winfo_rgb("SystemWindow")
+        luminance = (red * 299 + green * 587 + blue * 114) / 1000
+        return "dark" if luminance < 32768 else "light"
+      except Exception:
+        return "light"
+
+    return mode
+
+  def _get_theme_palette(self, effective_mode):
+    """Return color palette for the requested effective mode."""
+    if effective_mode == "dark":
+      return {
+        "bg": "#000000",
+        "section": "#111111",
+        "line": "#4a4a4a",
+        "fg": "#f2f2f2",
+        "entry_bg": "#151515",
+        "entry_fg": "#ffffff",
+        "disabled_bg": "#9a9a9a",
+        "disabled_fg": "#1f1f1f",
+        "muted_fg": "#7f7f7f",
+        "checkbox_bg": "#ffffff",
+      }
+
+    return {
+      "bg": "#f0f0f0",
+      "section": "#ececec",
+      "line": "#cfcfcf",
+      "fg": "#111111",
+      "entry_bg": "#ffffff",
+      "entry_fg": "#111111",
+      "disabled_bg": "#d0d0d0",
+      "disabled_fg": "#5c5c5c",
+      "muted_fg": "#7a7a7a",
+      "checkbox_bg": "#ffffff",
+    }
+
+  def _apply_theme_to_tk_widgets(self, widget, palette):
+    """Apply base palette to classic Tk widgets recursively."""
+    try:
+      if isinstance(widget, (tk.Frame, tk.LabelFrame, tk.Toplevel)):
+        widget.configure(bg=palette["bg"])
+      elif isinstance(widget, tk.Canvas):
+        widget.configure(bg=palette["bg"], highlightbackground=palette["line"])
+      elif isinstance(widget, tk.Checkbutton):
+        widget.configure(
+          bg=palette["bg"],
+          fg=palette["fg"],
+          activebackground=palette["line"],
+          activeforeground="#111111",
+          selectcolor=palette["checkbox_bg"],
+          disabledforeground=palette["muted_fg"],
+        )
+      elif isinstance(widget, tk.Entry):
+        widget.configure(
+          bg=palette["entry_bg"],
+          fg=palette["entry_fg"],
+          insertbackground=palette["entry_fg"],
+          disabledbackground=palette["disabled_bg"],
+          disabledforeground=palette["disabled_fg"],
+          readonlybackground=palette["disabled_bg"],
+          highlightbackground=palette["line"],
+        )
+      elif isinstance(widget, tk.Text):
+        widget.configure(
+          bg=palette["entry_bg"],
+          fg=palette["entry_fg"],
+          insertbackground=palette["entry_fg"],
+          highlightbackground=palette["line"],
+          selectbackground=palette["section"],
+          selectforeground=palette["entry_fg"],
+        )
+      elif isinstance(widget, tk.Listbox):
+        widget.configure(
+          bg=palette["entry_bg"],
+          fg=palette["entry_fg"],
+          disabledforeground=palette["muted_fg"],
+          highlightbackground=palette["line"],
+          selectbackground=palette["section"],
+          selectforeground=palette["entry_fg"],
+        )
+      elif isinstance(widget, tk.Button):
+        # Keep explicitly colored action buttons unchanged.
+        pass
+      elif isinstance(widget, tk.Label):
+        widget.configure(bg=palette["bg"])
+        if widget.cget("fg") in ("black", "#000000", "SystemWindowText"):
+          widget.configure(fg=palette["fg"])
+    except tk.TclError:
+      pass
+
+    for child in widget.winfo_children():
+      self._apply_theme_to_tk_widgets(child, palette)
+
+  def apply_theme(self):
+    """Apply selected appearance mode to the whole interface."""
+    effective_mode = self._get_effective_theme_mode()
+    palette = self._get_theme_palette(effective_mode)
+
+    self.root.configure(bg=palette["bg"])
+    style = ttk.Style(self.root)
+    style.theme_use("clam")
+
+    style.configure(".", background=palette["bg"], foreground=palette["fg"])
+    style.configure("TFrame", background=palette["bg"])
+    style.configure("TLabelframe", background=palette["bg"], bordercolor=palette["line"])
+    style.configure("TLabelframe.Label", background=palette["bg"], foreground=palette["fg"])
+    style.configure("TLabel", background=palette["bg"], foreground=palette["fg"])
+    style.configure(
+      "TButton",
+      background=palette["section"],
+      foreground=palette["fg"],
+      bordercolor=palette["line"],
+      lightcolor=palette["line"],
+      darkcolor=palette["line"],
+      relief="solid",
+      borderwidth=1,
+    )
+    style.map(
+      "TButton",
+      background=[("active", palette["line"]), ("disabled", palette["disabled_bg"])],
+      foreground=[("active", "#111111"), ("disabled", palette["muted_fg"])],
+    )
+    style.configure(
+      "TEntry",
+      fieldbackground=palette["entry_bg"],
+      foreground=palette["entry_fg"],
+      bordercolor=palette["line"],
+      insertcolor=palette["entry_fg"],
+    )
+    style.map(
+      "TEntry",
+      fieldbackground=[("readonly", palette["disabled_bg"]), ("disabled", palette["disabled_bg"])],
+      foreground=[("readonly", palette["disabled_fg"]), ("disabled", palette["disabled_fg"])],
+    )
+    style.configure(
+      "TCombobox",
+      fieldbackground=palette["entry_bg"],
+      foreground=palette["entry_fg"],
+      background=palette["section"],
+      arrowcolor=palette["fg"],
+      bordercolor=palette["line"],
+    )
+    style.map(
+      "TCombobox",
+      fieldbackground=[("readonly", palette["entry_bg"]), ("disabled", palette["disabled_bg"])],
+      foreground=[("disabled", palette["disabled_fg"]), ("readonly", palette["entry_fg"])],
+      selectbackground=[("readonly", palette["entry_bg"])],
+      selectforeground=[("readonly", palette["entry_fg"])],
+    )
+    style.configure(
+      "TCheckbutton",
+      background=palette["bg"],
+      foreground=palette["fg"],
+      indicatorbackground=palette["checkbox_bg"],
+      indicatorforeground="#000000",
+    )
+    style.map(
+      "TCheckbutton",
+      background=[("active", palette["line"])],
+      foreground=[("active", "#111111"), ("disabled", palette["muted_fg"])],
+      indicatorbackground=[("selected", palette["checkbox_bg"]), ("!selected", palette["checkbox_bg"])],
+    )
+    style.configure("TNotebook", background=palette["bg"], bordercolor=palette["line"])
+    style.configure(
+      "TNotebook.Tab",
+      background=palette["section"],
+      foreground=palette["fg"],
+      bordercolor=palette["line"],
+      lightcolor=palette["line"],
+      darkcolor=palette["line"],
+    )
+    style.map(
+      "TNotebook.Tab",
+      background=[("selected", palette["bg"]), ("active", palette["line"])],
+      foreground=[("active", "#111111"), ("disabled", palette["muted_fg"])],
+    )
+    style.configure(
+      "Treeview",
+      background=palette["entry_bg"],
+      foreground=palette["entry_fg"],
+      fieldbackground=palette["entry_bg"],
+      bordercolor=palette["line"],
+    )
+    style.configure(
+      "Treeview.Heading",
+      background=palette["section"],
+      foreground=palette["fg"],
+      bordercolor=palette["line"],
+    )
+
+    self._apply_theme_to_tk_widgets(self.root, palette)
+
+  def on_theme_mode_changed(self, _event=None):
+    """Update active theme when the appearance combobox changes."""
+    selected_label = (self.theme_choice_var.get() or "").strip()
+    selected_mode = self.theme_label_to_mode.get(selected_label, "system")
+    self.theme_mode_var.set(selected_mode)
+    self.apply_theme()
 
   def create_node_tab(self):
     """Create node control tab"""
@@ -3186,6 +3406,31 @@ class FBDManager:
     ttk.Button(
       profile_row2, text="Delete Profile", command=self.delete_profile
     ).pack(side="left", padx=5)
+
+    appearance_frame = ttk.LabelFrame(
+      scrollable_frame, text="Appearance", padding=10
+    )
+    appearance_frame.pack(fill="x", padx=10, pady=5)
+
+    ttk.Label(appearance_frame, text="Theme mode:").grid(
+      row=0, column=0, sticky="w", pady=2
+    )
+    self.theme_combo = ttk.Combobox(
+      appearance_frame,
+      textvariable=self.theme_choice_var,
+      values=list(self.theme_mode_labels.values()),
+      state="readonly",
+      width=24,
+    )
+    self.theme_combo.grid(row=0, column=1, sticky="w", pady=2)
+    self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_mode_changed)
+
+    ttk.Label(
+      appearance_frame,
+      text="Dark mode colors are applied when Dark or system-dark is active.",
+      font=("Arial", 8),
+      foreground="gray",
+    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     # FBD executable path
     path_frame = ttk.LabelFrame(
@@ -6595,6 +6840,7 @@ class FBDManager:
     default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
     default_config = {
       "fbd_path": "./fbd",
+      "theme_mode": "system",
       "network": "main",
       "host": "0.0.0.0",
       "log_level": "info",
@@ -6636,6 +6882,7 @@ class FBDManager:
     """Save configuration to file"""
     config = {
       "fbd_path": self.fbd_path_var.get(),
+      "theme_mode": self.theme_mode_var.get(),
       "network": self.network_var.get(),
       "host": self.host_var.get(),
       "log_level": self.loglevel_var.get(),
@@ -6679,6 +6926,11 @@ class FBDManager:
     """Load saved settings into UI"""
     default_miner_threads = str(max(1, (os.cpu_count() or 1) // 2))
     self.fbd_path_var.set(self.config.get("fbd_path", "./fbd"))
+    theme_mode = (self.config.get("theme_mode", "system") or "system").lower()
+    if theme_mode not in ("system", "dark", "light"):
+      theme_mode = "system"
+    self.theme_mode_var.set(theme_mode)
+    self.theme_choice_var.set(self.theme_mode_labels.get(theme_mode, "Same as system"))
     self.network_var.set(self.config.get("network", "main"))
     self.host_var.set(self.config.get("host", "0.0.0.0"))
     self.loglevel_var.set(self.config.get("log_level", "info"))
@@ -6729,6 +6981,7 @@ class FBDManager:
       self.load_email_settings()
 
     self.toggle_mining_options()
+    self.apply_theme()
 
   def save_settings(self):
     """Save current settings"""
@@ -6763,6 +7016,7 @@ class FBDManager:
       # Clear the config file by reloading defaults
       self.config = {
         "fbd_path": "./fbd",
+        "theme_mode": "system",
         "network": "main",
         "host": "0.0.0.0",
         "log_level": "info",
