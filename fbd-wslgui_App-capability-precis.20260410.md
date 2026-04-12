@@ -1,6 +1,6 @@
-# App capability precis
+# App capability precis - v5-1-0
 
-[chatgpt20260410timaxal]
+[chatgpt20260410timaxal, updated for stable v5-1-0]
 
 A full-stack GUI control panel for FBD that combines node management, mining, wallet operations, and highly automated name-auction participation with monitoring, notifications, and recovery.
 

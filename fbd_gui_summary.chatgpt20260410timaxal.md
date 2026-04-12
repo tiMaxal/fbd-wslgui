@@ -1,53 +1,63 @@
-# FBD GUI App – Capability Summary
+# FBD GUI App – Capability Summary - v5-1-0
+
+**Stable production-ready build** with comprehensive node, mining, wallet, and auction management.
 
 ## Overall
-- GUI for managing node, mining, wallet, and auctions
-- Tab-based interface with automation and monitoring
+- Full GUI for FBD node management, mining (solo + pool), wallet operations, and name auctions
+- Tab-based interface with background automation and real-time monitoring
+- Cross-platform (Native Linux, WSL, Windows)
+- Optional auto-restart and recovery
 
 ---
 
 ## Node & Mining
-- Start/stop node, monitor status, logs
-- Solo and pool mining support
-- Configurable threads, network, indexing
+- Start/stop FBD node with real-time status, log monitoring
+- Solo mining (100% rewards, needs full node)
+- Pool mining (shared rewards, lower variance, no node required)
+- Configurable threads (0=auto recommended), network (main/testnet/regtest/simnet), indexes
+- Auto-version checking for miner and FBD binaries
+- Safe auto-update with hash verification
 
 ---
 
 ## Wallet
-- Send/receive FBC
-- Transaction history
-- Address management
+- Create/list/delete wallets with mnemonic backup
+- Check balance and view addresses
+- Send FBC payments to wallet addresses
+- Transaction history and import/export
+- Multi-wallet support
 
 ---
 
 ## Auctions
-- Full lifecycle automation (open → bid → reveal → register)
-- Background job handling with retries
-- Competing bid detection
-- Notifications + optional email alerts
-
----
-
-## Block Calc
-- Block height + node status
+- Complete lifecycle automation (OPEN → BIDDING → REVEAL → REGISTER)
+- Background job engine with retry logic and recovery
+- Competing bid detection and wallet balance checking
+- Email notifications (optional SMTP setup)
+- Scan wallets for existing auctions
 - Auction phase timing calculator
-- Name status analysis
+- Personal watched names and rollout reminders
 
 ---
 
-## Settings
-- Config profiles (save/load)
-- Binary path management
-- Notifications panel
-- Owned names display
+## Block & Auction Calculator
+- Real-time block height and node status display
+- Auction state analysis and phase timing
+- Name availability and auction schedule prediction
+
+---
+
+## Settings & Persistence
+- Multi-profile configuration (save/load for different setups)
+- FBD path and RPC host/port configuration
+- Email notification settings
+- Binary auto-update configuration
+- Export/import settings backup
 
 ---
 
 ## System Features
-- Background automation engine
-- Persistent storage (jobs, configs, notifications)
-- Dependency checks
-- Safety checks (balance, wallet state)
+-
 
 ---
 

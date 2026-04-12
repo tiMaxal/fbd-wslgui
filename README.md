@@ -1,8 +1,10 @@
-#  FBD Node Manager GUI v0-5-0
+#  FBD Node Manager GUI v5-1-0
 
 > **Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026**
 
 A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, wallets, and name auctions.
+
+This is the stable production-ready version with comprehensive feature coverage. It includes built-in pool mining support with auto-detection and version checking, complete auction automation workflows (open → bid → reveal → register) with email notifications, and safe version checking and updating for miner and FBD binaries. The application offers both legacy ttk and modern rounded CustomTkinter UI modes, robust error handling with auto-restart and recovery, multi-profile support for saving and loading different configurations, and runs seamlessly across Linux, WSL, and Windows platforms.
 
 ##  Platform Compatibility
 
@@ -48,6 +50,13 @@ python3 -m pip install customtkinter
 ```
 
 **Minimum Python version:** 3.6+
+
+**Verified Working On:**
+- Ubuntu 20.04, 22.04, 24.04
+- Fedora 39, 40
+- Debian 11, 12
+- Windows 10/11 (via WSL)
+- Arch Linux
 
 ##  Appearance & Theming
 
@@ -95,7 +104,7 @@ Runs the test version (fbd_wslgui.test.py) separately.
 
 ### Core Files
 
-- **fbd_wslgui.py** - Main application (v0-5-0)
+- **fbd_wslgui.py** - Main application (v5-1-0)
 - **fbd_wslgui.test.py** - Test version for development
 - **fbd_wslgui.3-0-0.py** - Archived stable v3.0.0
 
@@ -492,6 +501,87 @@ Save multiple configurations for different use cases:
 Settings Tab → Save Settings → profiles/myprofile.json
 Settings Tab → Load Settings → Select profile
 ```
+
+##  Quick Reference by Use Case
+
+### Just Want to Run a Node?
+
+```bash
+# 1. Install dependencies (Linux native)
+sudo apt install -y python3-tk python3-requests
+python3 -m pip install customtkinter
+
+# 2. Download FBD binaries
+wget https://fbd.dev/download/fbd-latest-linux-x86_64.zip
+unzip fbd-latest-linux-x86_64.zip
+chmod +x fbd-latest-linux-x86_64/fbd fbd-latest-linux-x86_64/fbdctl
+
+# 3. Run GUI
+python3 fbd_wslgui.py
+
+# 4. In GUI: Settings → Save Settings → Node & Mining → Start Node
+```
+
+### Want to Mine Solo?
+
+```bash
+# 1. Complete node setup above
+# 2. In GUI: Node & Mining tab
+#    - Set "Miner Address" to your FBC wallet address
+#    - Set "Miner Threads" (0 = auto, recommended)
+#    - Check "Enable Mining"
+#    - Click "Start Node"
+# 3. Monitor logs for "Mined block" messages
+```
+
+### Want to Pool Mine (Easiest)?
+
+```bash
+# 1. Download miner binary
+wget https://l.woodburn.au/miner
+chmod +x miner
+
+# 2. Copy to same directory as fbd_wslgui.py
+
+# 3. In GUI: Node & Mining tab
+#    - Set "Pool Miner Wallet Address"
+#    - Keep Pool Host: pool.woodburn.au
+#    - Uncheck "Enable Mining" (important!)
+#    - Click "Start Pool Miner"
+
+# 4. Optional: Start node separately (Node & Mining → Start Node)
+```
+
+### Want to Bid on Names?
+
+```bash
+# 1. Ensure node is running
+# 2. Auctions tab → Enter name → Get Name Info
+# 3. When state = INACTIVE → Open Auction
+# 4. When state = BIDDING → Place Bid
+# 5. When state = REVEAL → Reveal Bid
+# 6. Register after auction closes
+```
+
+##  Common Questions
+
+**Q: Do I need the miner binary for solo mining?**
+A: No, pool mining requires it, but solo mining uses the built-in node miner.
+
+**Q: Can I run both solo and pool mining at the same time?**
+A: No, you must choose one or the other.
+
+**Q: Where are my settings saved?**
+A: `~/.fbdgui/fbdgui_config.json` (in your home directory)
+
+**Q: What if I forget to copy the miner binary?**
+A: The GUI will tell you "Pool miner not found" when you try to start pool mining. Download and copy it to the same directory as `fbd_wslgui.py`.
+
+**Q: How do I update the miner without restarting the GUI?**
+A: Settings tab → Check Miner Version → Check & Auto-Update Miner (it auto-updates if newer)
+
+**Q: Can I change networks?**
+A: Yes, Node & Mining tab → Network dropdown (main, testnet, regtest, simnet)
 
 ## 🆘 Troubleshooting
 
