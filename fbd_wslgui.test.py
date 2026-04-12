@@ -17,7 +17,6 @@ import subprocess
 import signal
 import json
 import importlib
-import shlex
 import shutil
 import site
 
@@ -25,7 +24,6 @@ import site
 def _optional_customtkinter_prompt_config_path():
   """Return the config path used to persist startup prompt state."""
   return os.path.expanduser("~/.fbdgui/fbdgui_config.json")
-
 
 def _optional_customtkinter_prompt_seen():
   """Return True when the startup CustomTkinter prompt was already shown."""
@@ -38,7 +36,6 @@ def _optional_customtkinter_prompt_seen():
     return bool(config.get("customtkinter_startup_prompt_seen", False))
   except Exception:
     return False
-
 
 def _mark_optional_customtkinter_prompt_seen():
   """Persist that the startup CustomTkinter prompt has already been shown."""
@@ -1596,7 +1593,7 @@ class FBDManager:
     self.theme_choice_var = tk.StringVar(value=self.theme_mode_labels["system"])
     self.ui_toolkit_labels = {
       UI_TOOLKIT_TTK: "Legacy ttk (current)",
-      UI_TOOLKIT_CUSTOMTK: "Rounded CustomTkinter (test)",
+      UI_TOOLKIT_CUSTOMTK: "Rounded CustomTkinter",
     }
     self.ui_toolkit_label_to_mode = {
       label: mode for mode, label in self.ui_toolkit_labels.items()
@@ -2046,7 +2043,14 @@ class FBDManager:
 
   def _create_toplevel(self):
     """Create a popup window that follows the active theme immediately."""
-    dialog = tk.Toplevel(self.root)
+    if self.customtkinter_active:
+      # CTkToplevel initialises asynchronously; update() forces it to be
+      # rendered so grab_set() doesn't raise 'window not viewable'.
+      w = ctk.CTkToplevel(self.root)
+      w.update()
+      return w
+    else:
+      dialog = tk.Toplevel(self.root)
     self._theme_dialog(dialog)
     return dialog
 
@@ -2875,8 +2879,38 @@ class FBDManager:
     )
     history_outer.pack(fill="both", expand=True, padx=10, pady=5)
 
-    self.tx_text = self._create_log_widget(history_frame)
-    self.tx_text.pack(fill="both", expand=True)
+    tx_columns = ("Type", "Net (FBC)", "Confirmations", "Block", "Timestamp", "TXID")
+    tx_tree_frame = ttk.Frame(history_frame)
+    tx_tree_frame.pack(fill="both", expand=True)
+
+    self.tx_tree = ttk.Treeview(
+      tx_tree_frame, columns=tx_columns, show="headings", height=8
+    )
+    self.tx_tree.heading("Type", text="Type")
+    self.tx_tree.heading("Net (FBC)", text="Net (FBC)")
+    self.tx_tree.heading("Confirmations", text="Conf")
+    self.tx_tree.heading("Block", text="Block")
+    self.tx_tree.heading("Timestamp", text="Timestamp")
+    self.tx_tree.heading("TXID", text="TXID")
+
+    self.tx_tree.column("Type", width=90, anchor="w")
+    self.tx_tree.column("Net (FBC)", width=110, anchor="e")
+    self.tx_tree.column("Confirmations", width=80, anchor="center")
+    self.tx_tree.column("Block", width=90, anchor="center")
+    self.tx_tree.column("Timestamp", width=145, anchor="center")
+    self.tx_tree.column("TXID", width=420, anchor="w")
+
+    tx_scrollbar = ttk.Scrollbar(
+      tx_tree_frame, orient="vertical", command=self.tx_tree.yview
+    )
+    self.tx_tree.configure(yscrollcommand=tx_scrollbar.set)
+    self.tx_tree.pack(side="left", fill="both", expand=True)
+    tx_scrollbar.pack(side="right", fill="y")
+
+    self._make_treeview_sortable(self.tx_tree, tx_columns)
+    self.tx_tree.bind("<Button-1>", self._on_tx_tree_click)
+    self.tx_tree.bind("<Double-1>", lambda e: self._on_tx_tree_click(e, open_any_column=True))
+    self.tx_tree.tag_configure("tx_link", foreground="#1e6bd6")
 
     self._create_button(
       history_frame, text="Load Transactions", command=self.load_transactions
@@ -2955,6 +2989,7 @@ class FBDManager:
       "Wallet",
       "Bid Amount",
       "Lockup",
+      "Top Lockup",
       "Winning Cost",
       "Progress",
       "Created",
@@ -2969,6 +3004,7 @@ class FBDManager:
     self.jobs_tree.heading("Wallet", text="Wallet")
     self.jobs_tree.heading("Bid Amount", text="Bid Amount")
     self.jobs_tree.heading("Lockup", text="Lockup (Bid+Blind)")
+    self.jobs_tree.heading("Top Lockup", text="Top Lockup")
     self.jobs_tree.heading("Winning Cost", text="Winning Cost")
     self.jobs_tree.heading("Progress", text="Progress")
     self.jobs_tree.heading("Created", text="Created")
@@ -2978,6 +3014,7 @@ class FBDManager:
     self.jobs_tree.column("Wallet", width=70)
     self.jobs_tree.column("Bid Amount", width=80)
     self.jobs_tree.column("Lockup", width=90)
+    self.jobs_tree.column("Top Lockup", width=120)
     self.jobs_tree.column("Winning Cost", width=95)
     self.jobs_tree.column("Progress", width=180)
     self.jobs_tree.column("Created", width=90)
@@ -2990,6 +3027,7 @@ class FBDManager:
 
     self.jobs_tree.pack(side="left", fill="x", expand=True)
     jobs_scrollbar.pack(side="right", fill="y")
+    self._make_treeview_sortable(self.jobs_tree, columns)
 
     self.jobs_context_menu = tk.Menu(self.root, tearoff=0)
     self.jobs_context_menu.add_command(
@@ -3002,6 +3040,8 @@ class FBDManager:
       label="Cancel Job", command=self.cancel_selected_job
     )
     self.jobs_tree.bind("<Button-3>", self.show_jobs_context_menu)
+    self.jobs_tree.bind("<Button-1>", self._hide_context_menus)
+    self.root.bind("<Button-1>", self._hide_context_menus, add="+")
 
     # Job control buttons
     jobs_controls = self._create_inline_frame(jobs_frame)
@@ -3189,14 +3229,40 @@ class FBDManager:
     mynames_outer, mynames_frame = self._create_section_frame(scrollable_frame, "My Names", padding=5)
     mynames_outer.pack(fill="x", padx=10, pady=5)
 
-    self.names_text = self._create_log_widget(
-      mynames_frame, lines=3, wrap="word"
+    # Create treeview for names table
+    self.names_tree = ttk.Treeview(
+      mynames_frame, columns=("Name", "Value", "Renew Due"), height=6, show="headings"
     )
-    self.names_text.pack(fill="both", expand=True)
+    self.names_tree.column("Name", width=150, anchor="w")
+    self.names_tree.column("Value", width=120, anchor="center")
+    self.names_tree.column("Renew Due", width=150, anchor="center")
+    
+    self.names_tree.heading("Name", text="Registered Name")
+    self.names_tree.heading("Value", text="Value Paid (FBC)")
+    self.names_tree.heading("Renew Due", text="Renew Due Date")
+    
+    # Bind right-click context menu
+    self.names_tree.bind("<Button-3>", self._show_names_context_menu)
+    self.names_tree.bind("<Button-1>", self._hide_context_menus)
+    self.names_tree.pack(fill="both", expand=True, pady=(0, 5))
+    self._make_treeview_sortable(self.names_tree, ("Name", "Value", "Renew Due"))
 
+    self.names_context_menu = tk.Menu(self.root, tearoff=0)
+    self.names_context_menu.add_command(
+      label="Manage DNS Records", command=self._show_names_dns_dialog
+    )
+
+    # Button frame for Load and DNS buttons (use _create_inline_frame so bg matches section in dark mode)
+    names_button_frame = self._create_inline_frame(mynames_frame)
+    names_button_frame.pack(fill="x", pady=5)
+    
     self._create_button(
-      mynames_frame, text="Load My Names", command=self.load_my_names
-    ).pack(pady=5)
+      names_button_frame, text="Load My Names", command=self.load_my_names
+    ).pack(side="left", padx=2)
+    
+    self._create_button(
+      names_button_frame, text="DNS", command=self._show_names_dns_dialog
+    ).pack(side="left", padx=2)
 
     # Auction info
     info_text_outer, info_text_frame = self._create_section_frame(
@@ -5816,6 +5882,11 @@ class FBDManager:
     dialog.geometry("620x260")
     dialog.transient(self.root)
     dialog.grab_set()
+    def close_dialog(_event=None):
+      """Close copy wallet address dialog."""
+      dialog.destroy()
+
+    dialog.bind("<Escape>", close_dialog)
 
     ttk.Label(
       dialog,
@@ -5934,27 +6005,43 @@ class FBDManager:
     button_frame = ttk.Frame(dialog)
     button_frame.pack(pady=(0, 10))
 
-    self._create_button(
+    copy_btn = self._create_button(
       button_frame, text="Copy Address", command=copy_selected_wallet_address
-    ).pack(side="left", padx=5)
+    )
+    copy_btn.pack(side="left", padx=5)
 
-    self._create_button(
+    send_to_btn = self._create_button(
       button_frame, text="Copy -> Send To", command=copy_into_send_to
-    ).pack(side="left", padx=5)
+    )
+    send_to_btn.pack(side="left", padx=5)
 
-    self._create_button(
+    pool_btn = self._create_button(
       button_frame,
       text="Copy -> Pool Miner Address",
       command=copy_into_pool_miner_address,
-    ).pack(side="left", padx=5)
-
-    self._create_button(
-      button_frame, text="Copy -> Miner Address", command=copy_into_miner_address
-    ).pack(side="left", padx=5)
-
-    self._create_button(button_frame, text="Close", command=dialog.destroy).pack(
-      side="left", padx=5
     )
+    pool_btn.pack(side="left", padx=5)
+
+    miner_btn = self._create_button(
+      button_frame, text="Copy -> Miner Address", command=copy_into_miner_address
+    )
+    miner_btn.pack(side="left", padx=5)
+
+    close_btn = self._create_button(button_frame, text="Close", command=close_dialog)
+    close_btn.pack(side="left", padx=5)
+
+    for widget in (
+      wallet_picker,
+      copy_btn,
+      send_to_btn,
+      pool_btn,
+      miner_btn,
+      close_btn,
+    ):
+      try:
+        widget.bind("<Escape>", close_dialog)
+      except Exception:
+        pass
 
     # Center dialog on parent window
     dialog.update_idletasks()
@@ -5972,12 +6059,29 @@ class FBDManager:
 
   def create_wallet(self):
     """Create a new wallet"""
-    # Check if node is running
     if not self.check_node_running():
       return
 
-    name = simpledialog.askstring("Create Wallet", "Enter wallet name:")
-    if name:
+    dialog = self._create_toplevel()
+    dialog.title("Create Wallet")
+    dialog.geometry("400x180")
+    dialog.transient(self.root)
+    dialog.grab_set()
+
+    def close_dialog(_event=None):
+      dialog.destroy()
+
+    dialog.bind("<Escape>", close_dialog)
+
+    ttk.Label(dialog, text="Enter wallet name:", font=("Arial", 10)).pack(pady=(18, 5))
+    name_entry = ttk.Entry(dialog, width=40)
+    name_entry.pack(pady=5, fill="x", padx=20)
+
+    def do_create():
+      name = name_entry.get().strip()
+      if not name:
+        return
+      dialog.destroy()
       result = self.rpc_call("createwallet", [name])
       if result:
         self.log(f"Wallet created: {name}")
@@ -5985,6 +6089,18 @@ class FBDManager:
           self.show_seed_dialog(name, result["mnemonic"])
         self.wallet_name_var.set(name)
         self.list_wallets(show_feedback=False)
+
+    btn_frame = ttk.Frame(dialog)
+    btn_frame.pack(pady=12)
+    create_btn = ttk.Button(btn_frame, text="Create", command=do_create)
+    create_btn.pack(side="left", padx=6)
+    cancel_btn = ttk.Button(btn_frame, text="Cancel", command=close_dialog)
+    cancel_btn.pack(side="left", padx=6)
+
+    for widget in (name_entry, create_btn, cancel_btn):
+      widget.bind("<Escape>", close_dialog)
+    name_entry.bind("<Return>", lambda _e: do_create())
+    name_entry.focus_set()
 
   def import_wallet(self):
     """Import an existing wallet from seed phrase"""
@@ -5995,25 +6111,29 @@ class FBDManager:
     # Create dialog for wallet import
     dialog = self._create_toplevel()
     dialog.title("Import Wallet")
-    dialog.geometry("500x250")
+    dialog.geometry("500x380")
     dialog.transient(self.root)
     dialog.grab_set()
+    def close_dialog(_event=None):
+      """Close import wallet dialog."""
+      dialog.destroy()
+
+    dialog.bind("<Escape>", close_dialog)
 
     ttk.Label(dialog, text="Wallet Name:", font=("Arial", 10)).pack(pady=(10, 5))
-    name_entry = self._create_entry(dialog, width=40)
-    name_entry.pack(pady=5)
+    name_entry = ttk.Entry(dialog, width=40)
+    name_entry.pack(pady=5, fill="x", padx=20)
 
     ttk.Label(dialog, text="Seed Phrase (Mnemonic):", font=("Arial", 10)).pack(
       pady=(10, 5)
     )
-    seed_entry = self._create_entry(dialog, width=60)
-    seed_entry.pack(pady=5)
+    seed_entry = ttk.Entry(dialog, width=60)
+    seed_entry.pack(pady=5, fill="x", padx=20)
 
     ttk.Label(
       dialog,
       text="Enter your 12 or 24-word seed phrase, separated by spaces",
       font=("Arial", 8),
-      foreground="gray",
     ).pack(pady=5)
 
     def do_import():
@@ -6083,8 +6203,20 @@ class FBDManager:
           f"Details: {e}",
         )
 
-    self._create_button(dialog, text="Import", command=do_import).pack(pady=10)
-    self._create_button(dialog, text="Cancel", command=dialog.destroy).pack(pady=5)
+    import_btn = self._create_button(dialog, text="Import", command=do_import)
+    import_btn.pack(pady=10)
+    cancel_btn = self._create_button(dialog, text="Cancel", command=close_dialog)
+    cancel_btn.pack(pady=5)
+
+    for widget in (name_entry, seed_entry, import_btn, cancel_btn):
+      try:
+        widget.bind("<Escape>", close_dialog)
+      except Exception:
+        pass
+
+    if not self.customtkinter_active:
+      self._theme_dialog(dialog)
+    name_entry.focus_set()
 
   def delete_wallet(self):
     """Delete a wallet"""
@@ -6552,6 +6684,7 @@ class FBDManager:
   # Stage 6: Job Manager UI Methods
   def show_jobs_context_menu(self, event):
     """Show the jobs context menu for the row under the pointer."""
+    self._hide_context_menus()
     row_id = self.jobs_tree.identify_row(event.y)
     if not row_id:
       return
@@ -6563,6 +6696,19 @@ class FBDManager:
       self.jobs_context_menu.tk_popup(event.x_root, event.y_root)
     finally:
       self.jobs_context_menu.grab_release()
+
+  def _hide_context_menus(self, _event=None):
+    """Dismiss any active context menus so stale menus do not linger."""
+    try:
+      if hasattr(self, "jobs_context_menu"):
+        self.jobs_context_menu.unpost()
+    except Exception:
+      pass
+    try:
+      if hasattr(self, "names_context_menu"):
+        self.names_context_menu.unpost()
+    except Exception:
+      pass
 
   def _get_selected_job_context(self, show_warning=True):
     """Return the jobs payload and selected job for the jobs tree selection."""
@@ -6741,6 +6887,14 @@ class FBDManager:
         historical_bid = self._get_original_bid_amount(job, snapshot)
         bid_amount = f"{self._format_fbc(historical_bid)} FBC"
         lockup_amount = f"{self._format_fbc(job.get('lockup_amount', 0))} FBC"
+        highest_rival_lockup = self._to_float(snapshot.get("highest_rival_lockup", 0.0))
+        local_only_lockup = bool(snapshot.get("local_only_lockup", False))
+        if highest_rival_lockup > 0:
+          highest_lockup_text = f"{self._format_fbc(highest_rival_lockup)} FBC"
+        elif local_only_lockup:
+          highest_lockup_text = "[local]"
+        else:
+          highest_lockup_text = "-"
         winning_cost = self._get_winning_cost_text(job, snapshot)
 
         # Get status emoji and text
@@ -6754,6 +6908,15 @@ class FBDManager:
           job.get("created", job.get("created_at", ""))
         )
 
+        row_tags = [status]
+        if highest_rival_lockup > 0:
+          if highest_rival_lockup > historical_bid:
+            row_tags.append("rival_higher")
+          else:
+            row_tags.append("rival_lower")
+        elif local_only_lockup:
+          row_tags.append("rival_lower")
+
         # Insert into tree
         self.jobs_tree.insert(
           "",
@@ -6765,11 +6928,12 @@ class FBDManager:
             wallet,
             bid_amount,
             lockup_amount,
+            highest_lockup_text,
             winning_cost,
             progress_text,
             created_text,
           ),
-          tags=(status,),
+          tags=tuple(row_tags),
         )
 
       if jobs_changed:
@@ -6779,6 +6943,8 @@ class FBDManager:
       self.jobs_tree.tag_configure("registered", foreground="green")
       self.jobs_tree.tag_configure("lost", foreground="orange")
       self.jobs_tree.tag_configure("failed", foreground="red")
+      self.jobs_tree.tag_configure("rival_higher", foreground="#b22222")
+      self.jobs_tree.tag_configure("rival_lower", foreground="#1b8a3c")
 
       self.log(f"Jobs list refreshed ({len(jobs)} jobs)")
 
@@ -6796,6 +6962,7 @@ class FBDManager:
       "lost": "[X] Lost auction",
       "failed": "[!] Failed",
       "cancelled": "> Cancelled",
+      "manual_watch": "[~] Tracked (Manual)",
     }
     return status_map.get(status, f"[!] {status}")
 
@@ -6830,6 +6997,11 @@ class FBDManager:
       return error[:50] + ("..." if len(error) > 50 else "")
     elif status == "cancelled":
       return "Cancelled by user"
+    elif status == "manual_watch":
+      chain_state = str(job.get("chain_state") or "").strip()
+      if chain_state:
+        return f"Manual tracking ({chain_state})"
+      return "Manual tracking"
     else:
       return status
 
@@ -6937,6 +7109,8 @@ class FBDManager:
       ),
       "has_higher_unrevealed_lockup": False,
       "has_revealed_rival_above": False,
+      "highest_rival_lockup": 0.0,
+      "local_only_lockup": False,
       "next_highest_rival": 0.0,
       "can_compute_cost": False,
     }
@@ -6949,6 +7123,46 @@ class FBDManager:
     name_info = self.get_name_info_silent(name) or {}
     snapshot["state"] = name_info.get("state", "UNKNOWN")
     can_register = bool(name_info.get("canRegister", False))
+
+    def _extract_top_lockup(info):
+      """Best-effort extraction of top lockup from getnameinfo variants."""
+      candidates = []
+
+      def _push_value(raw):
+        value = self._to_float(raw, 0.0)
+        if value > 0:
+          if value > 1_000_000:
+            value = value / 1_000_000
+          candidates.append(value)
+
+      def _walk(obj, depth=0):
+        if depth > 4:
+          return
+        if isinstance(obj, dict):
+          for key, val in obj.items():
+            key_l = str(key).lower()
+            if (
+              key_l in {
+                "toplockup",
+                "top_lockup",
+                "highestlockup",
+                "highest_lockup",
+                "top",
+                "highestbid",
+                "highest_bid",
+                "highest",
+              }
+              or ("top" in key_l and "lock" in key_l)
+              or ("highest" in key_l and ("lock" in key_l or "bid" in key_l))
+            ):
+              _push_value(val)
+            _walk(val, depth + 1)
+        elif isinstance(obj, list):
+          for item in obj:
+            _walk(item, depth + 1)
+
+      _walk(info)
+      return max(candidates, default=0.0)
 
     our_bids = self.get_wallet_bids_silent(wallet, name) or []
     revealed_ours = [b for b in our_bids if b.get("revealed", False)]
@@ -6985,6 +7199,9 @@ class FBDManager:
       value = self._to_float(b.get("value", 0))
       revealed = bool(b.get("revealed", False))
 
+      if lockup > snapshot["highest_rival_lockup"]:
+        snapshot["highest_rival_lockup"] = lockup
+
       if (not revealed) and lockup > original_bid and snapshot["state"] == "REVEAL":
         snapshot["has_higher_unrevealed_lockup"] = True
 
@@ -6993,6 +7210,17 @@ class FBDManager:
 
       if revealed:
         revealed_rival_values.append(value)
+
+    top_lockup = _extract_top_lockup(name_info)
+    if top_lockup > snapshot["highest_rival_lockup"]:
+      snapshot["highest_rival_lockup"] = top_lockup
+
+    if (
+      snapshot["highest_rival_lockup"] <= 0
+      and bool(our_bids)
+      and not bool(rival_bids)
+    ):
+      snapshot["local_only_lockup"] = True
 
     revealed_not_above = [v for v in revealed_rival_values if v <= original_bid]
     snapshot["next_highest_rival"] = max(revealed_not_above, default=0.0)
@@ -7011,6 +7239,56 @@ class FBDManager:
       snapshot["outcome"] = "unknown"
 
     return snapshot
+
+  def _estimate_name_effective_value(self, wallet, name, fallback_value_fbc):
+    """Estimate value as our bid minus next highest bid, else our bid, else fallback."""
+    try:
+      def _norm_amount(raw):
+        amt = self._to_float(raw, 0.0)
+        if amt > 1_000_000:
+          amt = amt / 1_000_000
+        return amt
+
+      our_bids = self.get_wallet_bids_silent(wallet, name) or []
+      all_bids = self._get_auction_bids_silent(name) or []
+
+      our_values = [_norm_amount(b.get("value", 0)) for b in our_bids]
+      our_values = [v for v in our_values if v > 0]
+      if not our_values:
+        return fallback_value_fbc
+
+      our_bid = max(our_values)
+
+      our_signatures = set()
+      for b in our_bids:
+        our_signatures.add(
+          (
+            round(_norm_amount(b.get("value", 0)), 8),
+            round(_norm_amount(b.get("lockup", 0)), 8),
+          )
+        )
+
+      rival_values = []
+      for b in all_bids:
+        sig = (
+          round(_norm_amount(b.get("value", 0)), 8),
+          round(_norm_amount(b.get("lockup", 0)), 8),
+        )
+        if sig in our_signatures:
+          continue
+        rv = _norm_amount(b.get("value", 0))
+        if rv > 0:
+          rival_values.append(rv)
+
+      if rival_values:
+        next_highest = max([v for v in rival_values if v <= our_bid], default=max(rival_values))
+        effective = our_bid - next_highest
+        if effective > 0:
+          return effective
+
+      return our_bid if our_bid > 0 else fallback_value_fbc
+    except Exception:
+      return fallback_value_fbc
 
   def _sync_job_status_from_chain(self, job, snapshot):
     """Promote stale bid_placed jobs to revealed if chain data confirms reveal."""
@@ -7109,6 +7387,11 @@ class FBDManager:
       details_window = self._create_toplevel()
       details_window.title(f"Job Details - {job_name}")
       details_window.geometry("600x400")
+      def close_details(_event=None):
+        """Close job details popup."""
+        details_window.destroy()
+
+      details_window.bind("<Escape>", close_details)
 
       # JSON display
       details_text = self._create_log_widget(
@@ -7121,9 +7404,16 @@ class FBDManager:
       details_text.configure(state="disabled")
 
       # Close button
-      self._create_button(
-        details_window, text="Close", command=details_window.destroy
-      ).pack(pady=5)
+      close_btn = self._create_button(
+        details_window, text="Close", command=close_details
+      )
+      close_btn.pack(pady=5)
+
+      for widget in (details_text, close_btn):
+        try:
+          widget.bind("<Escape>", close_details)
+        except Exception:
+          pass
 
     except Exception as e:
       messagebox.showerror("Error", f"Failed to view job details: {e}")
@@ -7297,52 +7587,378 @@ class FBDManager:
       return
 
     try:
-      cmd, fbdctl_path = self.get_fbdctl_command(
-        "--wallet", wallet, "listtransactions", "20"
-      )
-      result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        cwd=Path(self.fbd_path_var.get()).parent,
-      )
+      def _round_to_minute(dt_obj):
+        """Round datetime to nearest minute and drop seconds."""
+        if dt_obj.second >= 30 or dt_obj.microsecond > 0:
+          dt_obj = dt_obj + timedelta(minutes=1)
+        return dt_obj.replace(second=0, microsecond=0)
 
-      if result.returncode == 0:
-        response = json.loads(result.stdout)
-        txs = (
-          response.get("result", [])
-          if isinstance(response, dict)
-          else response
+      def _is_probable_txid(value):
+        """Return True for 64-char lowercase/uppercase hex hashes."""
+        if not value or not isinstance(value, str):
+          return False
+        candidate = value.strip().lower()
+        if candidate.startswith("0x"):
+          candidate = candidate[2:]
+        if len(candidate) != 64:
+          return False
+        hexdigits = set("0123456789abcdef")
+        return all(ch in hexdigits for ch in candidate)
+
+      def _extract_txid(tx):
+        """Best-effort txid extraction from variant field names/shapes."""
+        candidate_keys = (
+          "txid",
+          "hash",
+          "txHash",
+          "tx_hash",
+          "transactionid",
+          "transaction_id",
+          "id",
+          "tx",
         )
-        self.tx_text.delete(1.0, tk.END)
+        for key in candidate_keys:
+          val = tx.get(key)
+          if isinstance(val, dict):
+            nested = val.get("txid") or val.get("hash")
+            if isinstance(nested, str) and _is_probable_txid(nested):
+              return nested.strip()
+          elif isinstance(val, str) and _is_probable_txid(val):
+            return val.strip()
 
-        for tx in txs:
-          self.tx_text.insert(tk.END, f"TXID: {tx.get('txid', 'N/A')}\n")
-          self.tx_text.insert(tk.END, f"Type: {tx.get('type', 'N/A')}\n")
-          self.tx_text.insert(
-            tk.END, f"Net: {tx.get('net', 0) / 1000000:.6f} FBC\n"
+        # Last chance: scan all string values for a txid-looking token.
+        for val in tx.values():
+          if isinstance(val, str):
+            parts = val.replace(",", " ").replace(";", " ").split()
+            for part in parts:
+              cleaned = part.strip("[](){}<>'\"")
+              if _is_probable_txid(cleaned):
+                return cleaned
+        return "N/A"
+
+      def _tx_action_label(tx):
+        """Map transaction/covenant metadata to a user-facing action label."""
+        cov_map_int = {
+          0: "NONE",
+          1: "CLAIM",
+          2: "OPEN",
+          3: "BID",
+          4: "REVEAL",
+          5: "REDEEM",
+          6: "REGISTER",
+          7: "UPDATE",
+          8: "RENEW",
+          9: "TRANSFER",
+          10: "FINALIZE",
+          11: "REVOKE",
+        }
+
+        cov = tx.get("covenant")
+        cov_type = None
+        cov_name = None
+        if isinstance(cov, dict):
+          cov_name = (
+            cov.get("action")
+            or cov.get("name")
+            or cov.get("typeName")
+            or cov.get("type_name")
           )
-          self.tx_text.insert(
-            tk.END, f"Confirmations: {tx.get('confirmations', 0)}\n"
-          )
+          cov_type = cov.get("type")
+        elif cov is not None:
+          cov_type = cov
 
-          # Add timestamp if available
-          timestamp = tx.get("time", None)
-          if timestamp:
-            from datetime import datetime
+        if isinstance(cov_name, str) and cov_name.strip():
+          return cov_name.strip().upper()
 
-            dt = datetime.fromtimestamp(timestamp)
-            self.tx_text.insert(
-              tk.END, f"Time: {dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
+        try:
+          cov_int = int(cov_type)
+          if cov_int in cov_map_int:
+            return cov_map_int[cov_int]
+        except Exception:
+          pass
 
-          self.tx_text.insert(tk.END, "-" * 50 + "\n")
-      else:
-        self.tx_text.delete(1.0, tk.END)
-        self.tx_text.insert(tk.END, f"Error: {result.stderr}")
+        # Fallback to tx/category nomenclature for non-covenant txs.
+        base = (
+          tx.get("type")
+          or tx.get("category")
+          or tx.get("txType")
+          or tx.get("tx_type")
+          or "N/A"
+        )
+        base_text = str(base).strip().lower()
+        base_map = {
+          "send": "SEND",
+          "receive": "RECV",
+          "coinbase": "COINBASE",
+          "generate": "MINED",
+          "immature": "IMMATURE",
+          "orphan": "ORPHAN",
+          "stake": "STAKE",
+        }
+        return base_map.get(base_text, str(base).strip().upper() or "N/A")
+
+      def _extract_transactions(payload):
+        """Normalize listtransactions responses from different fbd/fbdctl shapes."""
+        root = payload.get("result", payload) if isinstance(payload, dict) else payload
+
+        if isinstance(root, list):
+          return [tx for tx in root if isinstance(tx, dict)]
+
+        if isinstance(root, dict):
+          # Single transaction object.
+          if any(k in root for k in ("txid", "hash", "transactionid", "txHash")):
+            return [root]
+
+          for key in ("transactions", "txs", "history", "items", "list"):
+            val = root.get(key)
+            if isinstance(val, list):
+              return [tx for tx in val if isinstance(tx, dict)]
+            if isinstance(val, dict):
+              dict_rows = [row for row in val.values() if isinstance(row, dict)]
+              if dict_rows:
+                return dict_rows
+
+          nested_result = root.get("result")
+          if isinstance(nested_result, list):
+            return [tx for tx in nested_result if isinstance(tx, dict)]
+
+          for val in root.values():
+            if isinstance(val, list) and val and isinstance(val[0], dict):
+              if any("txid" in row or "hash" in row for row in val):
+                return [tx for tx in val if isinstance(tx, dict)]
+            if isinstance(val, dict):
+              dict_rows = [row for row in val.values() if isinstance(row, dict)]
+              if dict_rows:
+                return dict_rows
+
+          # Mapping keyed by txid/hash.
+          if root and all(isinstance(v, dict) for v in root.values()):
+            return [v for v in root.values() if isinstance(v, dict)]
+
+        return []
+
+      def _run_listtransactions(*extra_args):
+        cmd, _ = self.get_fbdctl_command(
+          "--wallet", wallet, "listtransactions", *extra_args
+        )
+        proc = subprocess.run(
+          cmd,
+          capture_output=True,
+          text=True,
+          cwd=Path(self.fbd_path_var.get()).parent,
+        )
+        if proc.returncode != 0:
+          return proc, []
+        payload = json.loads(proc.stdout)
+        return proc, _extract_transactions(payload)
+
+      call_attempts = [
+        ("200",),
+        ("200", "0"),
+        ("*", "200", "0"),
+        ("*", "200", "0", "true"),
+        tuple(),
+      ]
+      best_result = None
+      best_txs = []
+      accepted_args = tuple()
+      attempt_details = []
+      for args in call_attempts:
+        result_try, txs_try = _run_listtransactions(*args)
+        attempt_details.append(
+          f"args={list(args)} rc={result_try.returncode} rows={len(txs_try)}"
+        )
+        if best_result is None:
+          best_result = result_try
+        if result_try.returncode == 0 and len(txs_try) > len(best_txs):
+          best_result = result_try
+          best_txs = txs_try
+          accepted_args = args
+        if len(best_txs) > 1:
+          break
+
+      result, txs = best_result, best_txs
+
+      # Temporary instrumentation for RPC-shape diagnostics.
+      self.log(
+        "[tx-debug] listtransactions attempts: "
+        + " | ".join(attempt_details)
+        + f" | accepted={list(accepted_args)} total_rows={len(txs)}"
+      )
+
+      if not hasattr(self, "tx_tree"):
+        self.log("Transaction table not initialized")
+        return
+
+      for item in self.tx_tree.get_children():
+        self.tx_tree.delete(item)
+
+      if result.returncode != 0:
+        messagebox.showerror("Error", f"Failed to load transactions: {result.stderr}")
+        return
+
+      if not txs:
+        self.log(f"No transactions found for wallet '{wallet}'")
+        return
+
+      current_height = self._get_current_height_silent()
+      now = datetime.now()
+
+      for index, tx in enumerate(txs):
+        tx_type = _tx_action_label(tx)[:10]
+        net_fbc = self._to_float(tx.get("net", 0), 0.0) / 1_000_000
+        confirmations = int(self._to_float(tx.get("confirmations", 0), 0.0))
+
+        block_height_raw = tx.get("height")
+        if block_height_raw in [None, "", 0]:
+          block_height_raw = tx.get("blockHeight") or tx.get("block") or "-"
+
+        try:
+          block_height_num = int(block_height_raw)
+          block_height = str(block_height_num)
+        except Exception:
+          block_height_num = None
+          block_height = str(block_height_raw)
+
+        timestamp = tx.get("timestamp")
+        if timestamp in [None, "", 0]:
+          timestamp = tx.get("time") or tx.get("blockTime")
+        ts_text = "-"
+        if timestamp:
+          try:
+            tx_dt = datetime.fromtimestamp(int(float(timestamp)))
+            ts_text = _round_to_minute(tx_dt).strftime("%Y-%m-%d %H:%M")
+          except Exception:
+            ts_text = "-"
+
+        if ts_text == "-" and isinstance(current_height, int) and block_height_num is not None:
+          try:
+            blocks_ago = max(0, current_height - block_height_num)
+            approx_time = now - timedelta(minutes=blocks_ago * 2)
+            ts_text = _round_to_minute(approx_time).strftime("%Y-%m-%d %H:%M") + "~"
+          except Exception:
+            pass
+
+        txid = str(_extract_txid(tx))
+        self.tx_tree.insert(
+          "",
+          "end",
+          values=(
+            tx_type,
+            f"{net_fbc:.6f}",
+            str(confirmations),
+            block_height,
+            ts_text,
+            txid,
+          ),
+          tags=("tx_link",) if txid != "N/A" else (),
+        )
+
+      self.log(f"Loaded {len(txs)} transaction(s) for wallet '{wallet}'")
 
     except Exception as e:
       self.log(f"Error loading transactions: {e}")
+
+  def _on_tx_tree_click(self, event, open_any_column=False):
+    """Open explorer from tx table clicks (TXID column or any column on double-click)."""
+    if not hasattr(self, "tx_tree"):
+      return None
+
+    region = self.tx_tree.identify("region", event.x, event.y)
+    if region not in ("cell", "tree"):
+      return None
+
+    row_id = self.tx_tree.identify_row(event.y)
+    col_id = self.tx_tree.identify_column(event.x)
+    columns = list(self.tx_tree["columns"])
+    try:
+      txid_col_index = columns.index("TXID") + 1
+    except ValueError:
+      txid_col_index = len(columns)
+
+    should_open = open_any_column or (col_id == f"#{txid_col_index}")
+    if not row_id or not should_open:
+      return None
+
+    values = self.tx_tree.item(row_id, "values")
+    if not values:
+      return None
+
+    txid = values[-1]
+    self.log(
+      f"[tx-debug] click region={region} col={col_id} row={row_id} txid={txid}"
+    )
+    if txid and txid != "N/A":
+      self._open_transaction_explorer(txid)
+      return "break"
+    return None
+
+  def _open_transaction_explorer(self, txid):
+    """Open a transaction in the public explorer."""
+    if not txid:
+      return
+    token = str(txid).strip().strip("[](){}<>'\"")
+    if token.startswith("0x"):
+      token = token[2:]
+    if not token:
+      return
+    url = f"https://explorer.fistbump.org/tx/{token}"
+
+    def _try_spawn(cmd):
+      try:
+        completed = subprocess.run(
+          cmd,
+          timeout=8,
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+        )
+        return completed.returncode == 0
+      except Exception:
+        return False
+
+    is_wsl = _is_wsl_environment()
+    is_native_linux = sys.platform.startswith("linux") and not is_wsl
+    is_windows = sys.platform == "win32"
+    profile = "wsl" if is_wsl else ("native-linux" if is_native_linux else ("windows" if is_windows else sys.platform))
+    self.log(f"[tx-debug] opener profile: {profile}")
+
+    # Prefer explicit launchers in WSL to avoid silent gio/webbrowser failures.
+    fallback_attempts = []
+    if is_wsl:
+      # In WSL prefer opening the host Windows browser first.
+      fallback_attempts.append(["wslview", url])
+      fallback_attempts.append(["powershell.exe", "-NoProfile", "-Command", "Start-Process", url])
+      fallback_attempts.append(["cmd.exe", "/c", "start", "", url])
+      fallback_attempts.append(["xdg-open", url])
+      fallback_attempts.append(["gio", "open", url])
+    elif is_native_linux:
+      fallback_attempts.append(["xdg-open", url])
+      fallback_attempts.append(["gio", "open", url])
+    elif is_windows:
+      fallback_attempts.append(["powershell", "-NoProfile", "-Command", "Start-Process", url])
+      fallback_attempts.append(["cmd", "/c", "start", "", url])
+
+    # Non-WSL path still attempts the default browser first.
+    if not is_wsl:
+      try:
+        import webbrowser
+
+        opened = bool(webbrowser.open(url, new=2))
+        self.log(f"[tx-debug] webbrowser.open returned={opened}")
+        if opened:
+          return
+      except Exception as e:
+        self.log(f"Browser handler failed for txid {txid}: {e}")
+
+    for cmd in fallback_attempts:
+      executable = cmd[0]
+      if shutil.which(executable) or executable.endswith(".exe"):
+        self.log(f"[tx-debug] opener attempt: {cmd[0]}")
+        if _try_spawn(cmd):
+          self.log(f"[tx-debug] opener launched: {cmd[0]}")
+          return
+
+    self.log(f"Failed to open explorer URL for txid {txid}: no working URL opener found")
 
   # Auction methods
   def get_name_info(self):
@@ -7545,6 +8161,8 @@ class FBDManager:
 
           # Execute bid with job tracking
           if self.execute_send_bid(name, wallet, bid, lockup, job_id):
+            self.bid_amount_var.set("")
+            self.lockup_amount_var.set("")
             messagebox.showinfo(
               "Bid Placed - Automation Active",
               f"[OK] Bid placed on '{name}'!\n\n"
@@ -7558,7 +8176,9 @@ class FBDManager:
             self.delete_job(job_id)
         else:
           # Manual mode - just place bid
-          self.execute_send_bid(name, wallet, bid, lockup, job_id=None)
+          if self.execute_send_bid(name, wallet, bid, lockup, job_id=None):
+            self.bid_amount_var.set("")
+            self.lockup_amount_var.set("")
 
       elif state == "REVEAL":
         messagebox.showwarning(
@@ -7691,6 +8311,10 @@ class FBDManager:
         cwd=Path(self.fbd_path_var.get()).parent,
       )
 
+      # Clear treeview first
+      for item in self.names_tree.get_children():
+        self.names_tree.delete(item)
+
       if result.returncode == 0:
         response = json.loads(result.stdout)
         names = (
@@ -7698,34 +8322,84 @@ class FBDManager:
           if isinstance(response, dict)
           else response
         )
-        self.names_text.delete(1.0, tk.END)
 
         if not names or len(names) == 0:
-          self.names_text.insert(
-            tk.END, f"No names found for wallet '{wallet}'.\n\n"
-          )
-          self.names_text.insert(
-            tk.END, "This wallet has not registered any names yet.\n"
-          )
-          self.names_text.insert(
-            tk.END,
-            "Use the 'Open Auction' or 'Register' buttons above to acquire names.",
-          )
           self.log(f"No names found for wallet: {wallet}")
         else:
+          # Get current block height for renewal calculations
+          current_height = self._get_current_height_silent()
+
           for name_data in names:
-            name_info = name_data.get("name", {})
-            self.names_text.insert(
-              tk.END, f"Name: {name_info.get('string', 'N/A')}\n"
+            name_info = name_data.get("name", {}) if isinstance(name_data.get("name"), dict) else {}
+            name_str = name_info.get("string") or (
+              name_data.get("name") if isinstance(name_data.get("name"), str) else "N/A"
             )
-            self.names_text.insert(
-              tk.END, f"State: {name_info.get('state', 'N/A')}\n"
+            value_raw = name_data.get("value", 0) or name_info.get("value", 0)
+            value_fbc = value_raw / 1_000_000
+            value_fbc = self._estimate_name_effective_value(wallet, name_str, value_fbc)
+
+            # Try to resolve blocks/days until renewal from most specific to least specific.
+            # getnames entries may carry stats.blocksUntilExpire, stats.daysUntilExpire,
+            # or at minimum a "renewal" block that we can diff against current height.
+            stats = (
+              name_data.get("stats")
+              or name_info.get("stats")
+              or name_data.get("info", {}).get("stats")
+              or {}
             )
-            self.names_text.insert(
-              tk.END,
-              f"Value: {name_data.get('value', 0) / 1000000:.6f} FBC\n",
+
+            # 1) Direct days from pre-computed stats
+            days_until = stats.get("daysUntilExpire")
+            if days_until is not None:
+              try:
+                d = int(float(days_until))
+                renew_due_text = f"{d} days"
+              except (ValueError, TypeError):
+                renew_due_text = str(days_until)
+
+            # 2) Convert blocks to days from stats
+            elif stats.get("blocksUntilExpire") is not None:
+              try:
+                blocks = int(stats["blocksUntilExpire"])
+                days_calc = max(0, (blocks * 2) // (60 * 24))  # 2 min/block
+                renew_due_text = f"{days_calc} days"
+              except (ValueError, TypeError):
+                renew_due_text = f"~{stats['blocksUntilExpire']} blks"
+
+            # 3) Compute from "renewal" (last-renewal block) + current_height
+            #    FBD: 2 min/block, annual renewal ≈ 262,800 blocks
+            else:
+              renewal_block = (
+                name_data.get("renewal")
+                or name_info.get("renewal")
+                or name_data.get("info", {}).get("renewal")
+              )
+              if renewal_block and current_height:
+                try:
+                  RENEWAL_PERIOD = 262_800  # ~1 year at 2 min/block
+                  expiry_block = int(renewal_block) + RENEWAL_PERIOD
+                  blocks_left = expiry_block - int(current_height)
+                  if blocks_left > 0:
+                    days_calc = (blocks_left * 2) // (60 * 24)  # 2 min/block
+                    renew_due_text = f"{days_calc} days"
+                  else:
+                    renew_due_text = "EXPIRED"
+                except (ValueError, TypeError):
+                  renew_due_text = f"blk {renewal_block}"
+              elif renewal_block:
+                renew_due_text = f"blk {renewal_block}"
+              else:
+                self.log(
+                  f"load_my_names: no renewal info for '{name_str}' — "
+                  f"keys: {list(name_data.keys())}"
+                )
+                renew_due_text = "N/A"
+
+            # Insert into treeview
+            self.names_tree.insert(
+              "", "end", values=(name_str, f"{value_fbc:.6f}", renew_due_text)
             )
-            self.names_text.insert(tk.END, "-" * 40 + "\n")
+          
           self.log(f"Loaded {len(names)} names for wallet: {wallet}")
       else:
         error_msg = result.stderr
@@ -7734,25 +8408,520 @@ class FBDManager:
           "wallet not found" in error_msg.lower()
           or "does not exist" in error_msg.lower()
         ):
-          self.names_text.delete(1.0, tk.END)
-          self.names_text.insert(
-            tk.END, f"[!] Wallet '{wallet}' not found in this node.\n\n"
-          )
-          self.names_text.insert(
-            tk.END,
-            "Open the Active Wallet dropdown in Wallet tab to see available wallets,\n",
-          )
-          self.names_text.insert(
-            tk.END, "or 'Create Wallet' to create a new one."
-          )
           self.log(f"Wallet not found: {wallet}")
+          messagebox.showerror(
+            "Error",
+            f"Wallet '{wallet}' not found in this node.\n\n"
+            "Open the Active Wallet dropdown in Wallet tab to see available wallets,\n"
+            "or 'Create Wallet' to create a new one."
+          )
         else:
-          self.names_text.delete(1.0, tk.END)
-          self.names_text.insert(tk.END, f"Error: {error_msg}")
           self.log(f"Error loading names: {error_msg}")
+          messagebox.showerror("Error", f"Error loading names: {error_msg}")
 
     except Exception as e:
       self.log(f"Error loading names: {e}")
+      messagebox.showerror("Error", f"Error loading names: {e}")
+
+  # ========================================================================
+  # TREEVIEW SORT HELPERS
+  # ========================================================================
+
+  def _make_treeview_sortable(self, tree, columns):
+    """Bind column heading clicks to sort the treeview."""
+    if not hasattr(self, '_tree_sort_state'):
+      self._tree_sort_state = {}
+    if not hasattr(self, '_tree_col_labels'):
+      self._tree_col_labels = {}
+    tree_id = id(tree)
+    for col in columns:
+      label = tree.heading(col)['text']
+      self._tree_col_labels[(tree_id, col)] = label
+      tree.heading(
+        col, text=label,
+        command=lambda c=col, t=tree: self._sort_treeview_column(t, c),
+      )
+
+  def _sort_treeview_column(self, tree, col):
+    """Sort treeview by col on heading click, toggling direction."""
+    import re as _re
+
+    def _parse_relative_age_seconds(value):
+      text = (value or '').strip().lower().replace('ago', '').strip()
+      if not text:
+        return float('inf')
+      parts = _re.findall(r'([\d.]+)\s*([dhms])', text)
+      if not parts:
+        return None
+      multipliers = {'d': 86400.0, 'h': 3600.0, 'm': 60.0, 's': 1.0}
+      return sum(float(amount) * multipliers.get(unit, 0.0) for amount, unit in parts)
+
+    tree_id = id(tree)
+    key = (tree_id, col)
+    reverse = not self._tree_sort_state.get(key, False)
+    self._tree_sort_state[key] = reverse
+    items = [(tree.set(iid, col), iid) for iid in tree.get_children('')]
+
+    if col == "Created":
+      def created_key(item):
+        parsed = _parse_relative_age_seconds(item[0])
+        return parsed if parsed is not None else float('inf')
+
+      items.sort(
+        key=created_key,
+        reverse=reverse,
+      )
+    else:
+      numeric_columns = {
+        "Bid Amount",
+        "Lockup",
+        "Top Lockup",
+        "Highest Lockup",
+        "Winning Cost",
+        "Value",
+        "Net (FBC)",
+        "Confirmations",
+        "Block",
+        "Block Height",
+        "Blocks Remaining",
+        "Bids",
+      }
+      if col in numeric_columns:
+        def num_key(s):
+          m = _re.search(r'\d+(?:\.\d*)?', (s or '').replace(',', ''))
+          return float(m.group()) if m else float('-inf')
+        items.sort(key=lambda x: num_key(x[0]), reverse=reverse)
+      else:
+        items.sort(key=lambda x: (x[0] or '').lower(), reverse=reverse)
+    for new_idx, (_, iid) in enumerate(items):
+      tree.move(iid, '', new_idx)
+    labels = getattr(self, '_tree_col_labels', {})
+    for hcol in tree['columns']:
+      base = labels.get((tree_id, hcol), hcol)
+      indicator = (' \u25bc' if reverse else ' \u25b2') if hcol == col else ''
+      tree.heading(hcol, text=base + indicator)
+
+  # ========================================================================
+  # MY NAMES — CONTEXT MENU & DNS MANAGER
+  # ========================================================================
+
+  def _show_names_context_menu(self, event):
+    """Show context menu on right-click for the My Names table."""
+    self._hide_context_menus()
+    row_id = self.names_tree.identify_row(event.y)
+    if not row_id:
+      return
+    self.names_tree.selection_set(row_id)
+    self.names_tree.focus(row_id)
+    values = self.names_tree.item(row_id, 'values')
+    if not values:
+      return
+    try:
+      self.names_context_menu.tk_popup(event.x_root, event.y_root)
+    finally:
+      self.names_context_menu.grab_release()
+
+  def _show_names_dns_dialog(self):
+    """DNS button handler — open DNS manager for the selected name."""
+    selected = self.names_tree.selection()
+    if not selected:
+      messagebox.showwarning("Warning", "Please select a name from the table first.")
+      return
+    values = self.names_tree.item(selected[0], 'values')
+    if not values:
+      return
+    self._show_dns_manager(values[0])
+
+  def _show_dns_manager(self, name):
+    """Open (or focus) the non-modal DNS record manager for a name."""
+    if not hasattr(self, '_dns_windows'):
+      self._dns_windows = {}
+    existing = self._dns_windows.get(name)
+    if existing and existing.winfo_exists():
+      existing.lift()
+      existing.focus_force()
+      return
+
+    dns_win = tk.Toplevel(self.root)
+    self._theme_dialog(dns_win)
+    dns_win.title(f"DNS Records \u2014 {name}")
+    dns_win.geometry("660x480")
+    dns_win.resizable(True, True)
+    dns_win.bind("<Escape>", lambda e: dns_win.destroy())
+    dns_win.name = name
+    dns_win.records = []
+
+    def _on_close():
+      self._dns_windows.pop(name, None)
+      dns_win.destroy()
+
+    dns_win.protocol("WM_DELETE_WINDOW", _on_close)
+    self._dns_windows[name] = dns_win
+
+    # Header
+    ttk.Label(
+      dns_win, text=f"DNS Records for \u2018{name}\u2019",
+      font=("Arial", 12, "bold")
+    ).pack(anchor="w", padx=12, pady=(10, 0))
+
+    # Treeview
+    tv_frame = ttk.Frame(dns_win)
+    tv_frame.pack(fill="both", expand=True, padx=10, pady=6)
+    dns_tree = ttk.Treeview(tv_frame, columns=("Type", "Data"), show="headings", height=12)
+    dns_tree.heading("Type", text="Type")
+    dns_tree.heading("Data", text="Record Data")
+    dns_tree.column("Type", width=80, minwidth=60, anchor="center")
+    dns_tree.column("Data", width=520, minwidth=200, anchor="w")
+    tv_sb = ttk.Scrollbar(tv_frame, orient="vertical", command=dns_tree.yview)
+    dns_tree.configure(yscrollcommand=tv_sb.set)
+    dns_tree.pack(side="left", fill="both", expand=True)
+    tv_sb.pack(side="right", fill="y")
+    dns_win.dns_tree = dns_tree
+
+    # Buttons
+    btn_frame = ttk.Frame(dns_win)
+    btn_frame.pack(fill="x", padx=10, pady=(0, 4))
+    ttk.Button(btn_frame, text="Add",    command=lambda: self._dns_add_record(dns_win)).pack(side="left", padx=2)
+    ttk.Button(btn_frame, text="Edit",   command=lambda: self._dns_edit_record(dns_win)).pack(side="left", padx=2)
+    ttk.Button(btn_frame, text="Remove", command=lambda: self._dns_remove_record(dns_win)).pack(side="left", padx=2)
+    ttk.Separator(btn_frame, orient="vertical").pack(side="left", padx=6, fill="y")
+    ttk.Button(btn_frame, text="Save to Chain", command=lambda: self._dns_save_to_chain(dns_win)).pack(side="left", padx=2)
+    ttk.Button(btn_frame, text="Refresh",       command=lambda: self._dns_load_records(dns_win)).pack(side="left", padx=2)
+    ttk.Button(btn_frame, text="Docs \u2197",   command=self._open_dns_docs).pack(side="left", padx=2)
+    ttk.Button(btn_frame, text="Close  [Esc]",  command=_on_close).pack(side="right", padx=2)
+
+    # Status bar
+    dns_win.status_var = tk.StringVar(value="Loading\u2026")
+    ttk.Label(dns_win, textvariable=dns_win.status_var, font=("Arial", 8), foreground="gray").pack(
+      anchor="w", padx=12, pady=(0, 6)
+    )
+
+    self._dns_load_records(dns_win)
+
+  def _dns_load_records(self, dns_win):
+    """Fetch getnameresource and populate dns_win.records."""
+    dns_win.status_var.set("Loading DNS records\u2026")
+    try:
+      cmd, _ = self.get_fbdctl_command("getnameresource", dns_win.name)
+      result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        cwd=Path(self.fbd_path_var.get()).parent,
+      )
+      if result.returncode == 0:
+        response = json.loads(result.stdout)
+        result_data = response.get("result") if isinstance(response, dict) else response
+        if result_data is None:
+          dns_win.records = []
+          dns_win.status_var.set("No DNS records set for this name.")
+        elif isinstance(result_data, dict) and "records" in result_data:
+          dns_win.records = list(result_data.get("records") or [])
+          dns_win.status_var.set(f"{len(dns_win.records)} record(s) loaded.")
+        else:
+          dns_win.records = []
+          dns_win.status_var.set("No records (empty response).")
+      else:
+        dns_win.records = []
+        dns_win.status_var.set(f"Error: {result.stderr.strip()[:100]}")
+      self._dns_refresh_tree(dns_win)
+    except Exception as exc:
+      dns_win.status_var.set(f"Error: {exc}")
+      self._dns_refresh_tree(dns_win)
+
+  def _dns_refresh_tree(self, dns_win):
+    """Repopulate the DNS record treeview from dns_win.records."""
+    tree = dns_win.dns_tree
+    tree.delete(*tree.get_children())
+    for i, rec in enumerate(dns_win.records):
+      tree.insert("", "end", iid=str(i), values=(rec.get("type", "?"), self._format_dns_record_summary(rec)))
+
+  def _format_dns_record_summary(self, rec):
+    """One-line human-readable summary of a DNS record dict."""
+    typ = rec.get("type", "")
+    if typ in ("A", "AAAA", "SYNTH4", "SYNTH6"):
+      return rec.get("address", "")
+    if typ == "WALLET":
+      return f"pay\u2192 {rec.get('address', '')}"
+    if typ == "CNAME":
+      return f"\u2192 {rec.get('target', '')}"
+    if typ == "NS":
+      return f"ns: {rec.get('ns', '')}"
+    if typ in ("GLUE4", "GLUE6"):
+      return f"{rec.get('ns', '')}  \u2192  {rec.get('address', '')}"
+    if typ == "MX":
+      return f"pref={rec.get('preference', 0)}  {rec.get('exchange', '')}"
+    if typ == "TXT":
+      txt = rec.get("txt", [])
+      out = ";  ".join(str(v) for v in txt[:2])
+      return out + ("\u2026" if len(txt) > 2 else "")
+    if typ == "DS":
+      return f"keyTag={rec.get('keyTag', '')}  alg={rec.get('algorithm', '')}  digestType={rec.get('digestType', '')}"
+    if typ == "TLSA":
+      return f"port={rec.get('port', '')}  proto={rec.get('protocol', '')}  usage={rec.get('usage', '')}"
+    if typ == "CAA":
+      return f"[{rec.get('flags', 0)}]  {rec.get('tag', '')}  {rec.get('value', '')}"
+    if typ == "SUB":
+      inner = rec.get("records", [])
+      n = len(inner)
+      return f"{rec.get('name', '')}  ({n} nested record{'s' if n != 1 else ''})"
+    return str(rec)
+
+  def _get_dns_field_specs(self, typ):
+    """Return field specs for the Add/Edit dialog for DNS record type.
+    Each item: (label, key, widget_type, default)
+      widget_type: 'entry' | 'text' | 'combo'
+      combo default: ([values_list], default_str)
+    """
+    specs = {
+      "A":      [("IPv4 Address", "address", "entry", "")],
+      "AAAA":   [("IPv6 Address", "address", "entry", "")],
+      "CNAME":  [("Target hostname", "target", "entry", "")],
+      "NS":     [("Nameserver hostname", "ns", "entry", "")],
+      "GLUE4":  [("Nameserver hostname", "ns", "entry", ""),
+                 ("IPv4 glue address", "address", "entry", "")],
+      "GLUE6":  [("Nameserver hostname", "ns", "entry", ""),
+                 ("IPv6 glue address", "address", "entry", "")],
+      "SYNTH4": [("IPv4 Address", "address", "entry", "")],
+      "SYNTH6": [("IPv6 Address", "address", "entry", "")],
+      "MX":     [("Exchange hostname", "exchange", "entry", ""),
+                 ("Preference  (0=highest priority)", "preference", "entry", "10")],
+      "TXT":    [("Text values  (one per line, each \u2264255 bytes)", "txt", "text", [])],
+      "DS":     [("Key Tag (integer)", "keyTag", "entry", "0"),
+                 ("Algorithm  8=RSA/SHA256  13=ECDSA-P256  14=ECDSA-P384  15=Ed25519  16=Ed448",
+                  "algorithm", "combo", (["8", "13", "14", "15", "16"], "13")),
+                 ("Digest Type  1=SHA-1  2=SHA-256  4=SHA-384",
+                  "digestType", "combo", (["1", "2", "4"], "2")),
+                 ("Digest (hex-encoded)", "digest", "entry", "")],
+      "TLSA":   [("Port", "port", "entry", "443"),
+                 ("Protocol  6=TCP  17=UDP  132=SCTP",
+                  "protocol", "combo", (["6", "17", "132"], "6")),
+                 ("Usage  0=PKIX-TA  1=PKIX-EE  2=DANE-TA  3=DANE-EE",
+                  "usage", "combo", (["0", "1", "2", "3"], "3")),
+                 ("Selector  0=Full cert  1=SubjectPublicKeyInfo",
+                  "selector", "combo", (["0", "1"], "1")),
+                 ("Matching  0=Exact  1=SHA-256  2=SHA-512",
+                  "matchingType", "combo", (["0", "1", "2"], "1")),
+                 ("Certificate (hex-encoded)", "certificate", "entry", "")],
+      "CAA":    [("Flags  (0 or 128)", "flags", "combo", (["0", "128"], "0")),
+                 ("Tag", "tag", "combo", (["issue", "issuewild", "iodef"], "issue")),
+                 ("Value", "value", "entry", "")],
+      "WALLET": [("Payment address (fb1q\u2026)", "address", "entry", "")],
+      "SUB":    [("Subdomain label", "name", "entry", ""),
+                 ("Nested records  (JSON array)", "records_json", "text", [])],
+    }
+    return specs.get(typ, [])
+
+  def _dns_add_record(self, dns_win):
+    """Open Add-record dialog."""
+    def on_save(record):
+      dns_win.records.append(record)
+      self._dns_refresh_tree(dns_win)
+      dns_win.status_var.set(f"{len(dns_win.records)} record(s) \u2014 unsaved changes")
+    self._dns_record_edit_dialog(dns_win, record=None, on_save=on_save)
+
+  def _dns_edit_record(self, dns_win):
+    """Open Edit-record dialog for selected row."""
+    selected = dns_win.dns_tree.selection()
+    if not selected:
+      messagebox.showwarning("Warning", "Select a record to edit.", parent=dns_win)
+      return
+    idx = int(selected[0])
+    if idx >= len(dns_win.records):
+      return
+    record = dns_win.records[idx]
+    def on_save(new_record, bound_idx=idx):
+      dns_win.records[bound_idx] = new_record
+      self._dns_refresh_tree(dns_win)
+      dns_win.status_var.set(f"{len(dns_win.records)} record(s) \u2014 unsaved changes")
+    self._dns_record_edit_dialog(dns_win, record=record, on_save=on_save)
+
+  def _dns_remove_record(self, dns_win):
+    """Remove selected record after confirmation."""
+    selected = dns_win.dns_tree.selection()
+    if not selected:
+      messagebox.showwarning("Warning", "Select a record to remove.", parent=dns_win)
+      return
+    idx = int(selected[0])
+    if idx >= len(dns_win.records):
+      return
+    rec = dns_win.records[idx]
+    if not messagebox.askyesno(
+      "Confirm Remove",
+      f"Remove this {rec.get('type', '?')} record?\n\n{self._format_dns_record_summary(rec)}",
+      parent=dns_win,
+    ):
+      return
+    dns_win.records.pop(idx)
+    self._dns_refresh_tree(dns_win)
+    dns_win.status_var.set(f"{len(dns_win.records)} record(s) \u2014 unsaved changes")
+
+  def _dns_record_edit_dialog(self, dns_win, record=None, on_save=None):
+    """Non-blocking Add/Edit dialog for a single DNS record."""
+    dialog = tk.Toplevel(dns_win)
+    self._theme_dialog(dialog)
+    dialog.title("Add Record" if record is None else "Edit Record")
+    dialog.geometry("520x360")
+    dialog.resizable(True, True)
+    dialog.bind("<Escape>", lambda e: dialog.destroy())
+
+    RECORD_TYPES = [
+      "A", "AAAA", "CNAME", "NS", "GLUE4", "GLUE6",
+      "SYNTH4", "SYNTH6", "MX", "TXT", "DS", "TLSA", "CAA", "WALLET", "SUB",
+    ]
+    INT_KEYS = {
+      "preference", "keyTag", "algorithm", "digestType",
+      "port", "protocol", "usage", "selector", "matchingType", "flags",
+    }
+
+    top_row = ttk.Frame(dialog)
+    top_row.pack(fill="x", padx=12, pady=(10, 0))
+    ttk.Label(top_row, text="Type:", width=10).pack(side="left")
+    type_var = tk.StringVar(value=(record.get("type", "A") if record else "A"))
+    type_combo = ttk.Combobox(top_row, textvariable=type_var, values=RECORD_TYPES, width=12, state="readonly")
+    type_combo.pack(side="left", padx=4)
+
+    fields_outer = ttk.Frame(dialog)
+    fields_outer.pack(fill="both", expand=True, padx=12, pady=6)
+    field_widgets = {}  # key -> (tk widget or StringVar)
+
+    def rebuild_fields(*_):
+      for w in fields_outer.winfo_children():
+        w.destroy()
+      field_widgets.clear()
+      typ = type_var.get()
+      for label, key, wtype, default in self._get_dns_field_specs(typ):
+        row = ttk.Frame(fields_outer)
+        row.pack(fill="x", pady=2)
+        ttk.Label(row, text=label + ":", width=14, wraplength=130, justify="left").pack(
+          side="left", anchor="n", padx=(0, 4)
+        )
+        existing = record.get(key) if (record and record.get("type") == typ) else None
+        if wtype == "entry":
+          val = str(existing) if existing is not None else str(default)
+          var = tk.StringVar(value=val)
+          ttk.Entry(row, textvariable=var, width=38).pack(side="left", fill="x", expand=True)
+          field_widgets[key] = var
+        elif wtype == "text":
+          txt_w = scrolledtext.ScrolledText(row, height=4, width=38, wrap=tk.WORD)
+          txt_w.pack(side="left", fill="x", expand=True)
+          if existing is not None:
+            if key == "records_json":
+              txt_w.insert("1.0", json.dumps(existing, indent=2))
+            elif isinstance(existing, list):
+              txt_w.insert("1.0", "\n".join(str(v) for v in existing))
+            else:
+              txt_w.insert("1.0", str(existing))
+          field_widgets[key] = txt_w
+        elif wtype == "combo":
+          vals_list, def_val = default if isinstance(default, tuple) else ([], default)
+          val = str(existing) if existing is not None else str(def_val)
+          var = tk.StringVar(value=val)
+          ttk.Combobox(row, textvariable=var, values=vals_list, width=16, state="readonly").pack(side="left")
+          field_widgets[key] = var
+
+    type_combo.bind("<<ComboboxSelected>>", rebuild_fields)
+    rebuild_fields()
+
+    btn_row = ttk.Frame(dialog)
+    btn_row.pack(fill="x", padx=12, pady=(4, 10))
+
+    def on_ok():
+      typ = type_var.get()
+      new_rec = {"type": typ}
+      for label, key, wtype, default in self._get_dns_field_specs(typ):
+        widget = field_widgets.get(key)
+        if widget is None:
+          continue
+        if wtype == "text":
+          raw = widget.get("1.0", "end-1c").strip()
+          if key == "records_json":
+            try:
+              new_rec["records"] = json.loads(raw or "[]")
+            except json.JSONDecodeError:
+              messagebox.showerror("Invalid JSON", "Nested records field is not valid JSON.", parent=dialog)
+              return
+          else:
+            new_rec[key] = [line.strip() for line in raw.splitlines() if line.strip()]
+        else:
+          raw = widget.get().strip()
+          if key in INT_KEYS:
+            try:
+              new_rec[key] = int(raw)
+            except ValueError:
+              messagebox.showerror("Invalid value", f"'{key}' must be an integer.", parent=dialog)
+              return
+          else:
+            new_rec[key] = raw
+      if on_save:
+        on_save(new_rec)
+      dialog.destroy()
+
+    ttk.Button(btn_row, text="OK",     command=on_ok,           width=8).pack(side="left", padx=4)
+    ttk.Button(btn_row, text="Cancel", command=dialog.destroy,  width=8).pack(side="left")
+
+  def _dns_save_to_chain(self, dns_win):
+    """Send sendupdate to write current DNS records on-chain."""
+    wallet = self.wallet_name_var.get()
+    if not wallet:
+      messagebox.showwarning("Warning", "No wallet selected. Set active wallet in the Wallet tab.", parent=dns_win)
+      return
+    if not messagebox.askyesno(
+      "Confirm Save to Chain",
+      f"Send a sendupdate transaction for \u2018{dns_win.name}\u2019?\n\n"
+      f"  {len(dns_win.records)} record(s) will be written on-chain.\n"
+      f"  Wallet: {wallet}\n\n"
+      "A small transaction fee will be charged.",
+      parent=dns_win,
+    ):
+      return
+    dns_win.status_var.set("Sending transaction\u2026")
+    dns_win.update()
+    try:
+      resource_json = json.dumps({"records": dns_win.records})
+      cmd, _ = self.get_fbdctl_command("--wallet", wallet, "sendupdate", dns_win.name, resource_json)
+      result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        cwd=Path(self.fbd_path_var.get()).parent,
+      )
+      if result.returncode == 0:
+        response = json.loads(result.stdout)
+        txid = (response.get("result") or {}).get("txid", str(response.get("result", "")))
+        self.log(f"DNS update for '{dns_win.name}': TXID {txid}")
+        dns_win.status_var.set(f"Sent! TXID: {txid[:24]}\u2026")
+        messagebox.showinfo("DNS Updated", f"Records updated on-chain.\n\nTXID:\n{txid}", parent=dns_win)
+      else:
+        err = result.stderr.strip()
+        self.log(f"DNS sendupdate error: {err}")
+        dns_win.status_var.set(f"Error: {err[:80]}")
+        messagebox.showerror("Send Failed", err, parent=dns_win)
+    except Exception as exc:
+      self.log(f"DNS save error: {exc}")
+      dns_win.status_var.set(f"Error: {exc}")
+      messagebox.showerror("Error", str(exc), parent=dns_win)
+
+  def _open_dns_docs(self):
+    """Open https://fbd.dev/#records with WSL/Linux/Windows fallbacks."""
+    url = "https://fbd.dev/#records"
+    self.log(f"Opening: {url}")
+    try:
+      if sys.platform == "win32":
+        subprocess.Popen(["cmd", "/c", "start", "", url])
+        return
+      if sys.platform == "darwin":
+        subprocess.Popen(["open", url])
+        return
+      # Linux / WSL — try desktop openers first
+      for opener in ("xdg-open", "sensible-browser", "x-www-browser", "gnome-open"):
+        if shutil.which(opener):
+          subprocess.Popen([opener, url])
+          return
+      # WSL fallback: hand off to Windows explorer.exe
+      if _is_wsl_environment() and shutil.which("explorer.exe"):
+        subprocess.Popen(["explorer.exe", url])
+        return
+      import webbrowser
+      webbrowser.open(url)
+    except Exception as exc:
+      self.log(f"Could not open browser: {exc}  \u2014  URL: {url}")
 
   # Settings methods
   def load_config(self):
@@ -10792,13 +11961,13 @@ to access config and log files!
               # Try multiple methods to extract name
               name = None
 
-              # Method 1: Parse covenants array (e.g., ["BID fb.d"])
+              # Method 1: Parse covenants array (supports strings and dict entries)
               covenants_array = tx.get("covenants", [])
               if covenants_array and isinstance(covenants_array, list):
-                for covenant_str in covenants_array:
-                  if isinstance(covenant_str, str):
+                for covenant_entry in covenants_array:
+                  if isinstance(covenant_entry, str):
                     # Format: "ACTION name" (e.g., "BID fb.d")
-                    parts = covenant_str.split(
+                    parts = covenant_entry.split(
                       None, 1
                     ) # Split on first whitespace
                     if len(parts) >= 2:
@@ -10806,6 +11975,20 @@ to access config and log files!
                       if action in auction_tx_types:
                         name = parts[1]
                         break
+                  elif isinstance(covenant_entry, dict):
+                    c_action = str(
+                      covenant_entry.get("action")
+                      or covenant_entry.get("type")
+                      or ""
+                    ).upper()
+                    c_name = covenant_entry.get("name")
+                    if not c_name:
+                      c_items = covenant_entry.get("items", [])
+                      if isinstance(c_items, list) and c_items:
+                        c_name = c_items[0]
+                    if c_action in auction_tx_types and c_name:
+                      name = c_name
+                      break
 
               # Method 2: covenant.items[0]
               if not name:
@@ -10872,30 +12055,9 @@ to access config and log files!
 
         self.log(f"  Stack trace: {traceback.format_exc()}")
 
-      # STEP 4: Try RPC method to get wallet bids (if index-auctions enabled)
-      self.log(" -> Trying RPC method to find wallet auction activity...")
-      try:
-        # Try to get all wallet bids using RPC
-        result = self.rpc_call("getwalletbids", [wallet])
-        if result and not result.get("error"):
-          wallet_bids = result.get("result", [])
-          if wallet_bids:
-            for bid_entry in wallet_bids:
-              name = bid_entry.get("name")
-              if name and name not in found_names:
-                found_names.add(name)
-                self.log(
-                  f"   Found name '{name}' from wallet bids RPC"
-                )
-            self.log(f"  Found {len(wallet_bids)} bid(s) via RPC")
-          else:
-            self.log(
-              "  No bids found via RPC (this is normal if --index-auctions not enabled)"
-            )
-        else:
-          self.log("  RPC getwalletbids not available (this is normal)")
-      except Exception as e:
-        self.log(f"  RPC method not available: {e}")
+      # STEP 4 intentionally skipped in test build:
+      # avoid probing unsupported RPC `getwalletbids` (code -32601) and rely on
+      # listtransactions + covenant parsing + per-name wallet bid checks.
 
       if not found_names:
         self.log(" [OK]- No names found in wallet")
@@ -10906,15 +12068,23 @@ to access config and log files!
       # STEP 3: Check each found name's auction state
       for name in found_names:
         try:
-          # Skip if already in automation (unless completed/failed/lost)
-          existing_job = self.get_job_by_name(name)
-          if existing_job and existing_job.get("status") not in [
-            "completed",
-            "failed",
-            "lost",
-          ]:
-            self.log(f"  Skipping '{name}' - already in automation")
-            continue
+          # Determine if already tracked by an app job (automated or manual watch)
+          existing_job = self.get_job_by_name(name, wallet)
+          is_automated = (
+            existing_job is not None
+            and existing_job.get("status") not in ["registered", "failed", "lost"]
+            and not existing_job.get("watch_only", False)
+          )
+          is_watched = (
+            existing_job is not None
+            and existing_job.get("watch_only", False)
+          )
+          if is_automated:
+            self.log(
+              f"  '{name}' - already in automation (status: {existing_job.get('status')}), including"
+            )
+          elif is_watched:
+            self.log(f"  '{name}' - already in watch list, including")
 
           # Get detailed name info from blockchain
           full_info = self.get_name_info_silent(name)
@@ -10924,9 +12094,9 @@ to access config and log files!
 
           state = full_info.get("state", "UNKNOWN")
 
-          # Only interested in auction-related states
-          if state not in ["BIDDING", "REVEAL", "CLOSED"]:
-            self.log(f"  Skipping '{name}' - state is {state}")
+          # Include OPENING plus active auction states
+          if state not in ["OPENING", "BIDDING", "REVEAL", "CLOSED"]:
+            self.log(f"  Skipping '{name}' - state is {state}, not auction-related")
             continue
 
           # Get wallet's bids for this name
@@ -10938,18 +12108,22 @@ to access config and log files!
             "wallet": wallet,
             "bids": bids,
             "name_info": full_info,
+            "is_managed": is_automated,
+            "is_watched": is_watched,
+            "existing_job": existing_job,
           }
 
           auctions.append(auction_data)
+          tag = " [automated]" if is_automated else (" [watched]" if is_watched else " [untracked]")
           self.log(
-            f"  [OK] Found auction: {name} (state: {state}, bids: {len(bids)})"
+            f"  [OK] Found: {name} (state: {state}, bids: {len(bids)}){tag}"
           )
 
         except Exception as e:
           self.log(f"  Error checking name '{name}': {e}")
           continue
 
-      self.log(f" [OK] Scan complete: {len(auctions)} active auction(s) found")
+      self.log(f" [OK] Scan complete: {len(auctions)} item(s) found")
       return auctions
 
     except Exception as e:
@@ -11013,8 +12187,6 @@ to access config and log files!
       elif response is False: # No - manual input
         self.manual_import_name_dialog(wallet)
       else: # Cancel - show log
-        # Switch to Node & Mining tab to show log
-        self._notebook_select(0)
         self.log("=== SCAN RESULTS ===")
         self.log(f"No auctions found in wallet '{wallet}'.")
         self.log("Check the scan details above.")
@@ -11082,7 +12254,6 @@ to access config and log files!
           f"No active auctions found in any of the {len(wallets)} wallet(s).\n\n"
           "Check the log for details about each wallet.",
         )
-        self._notebook_select(0) # Switch to log tab
         return
 
       # Show all found auctions
@@ -11252,244 +12423,336 @@ to access config and log files!
 
   def show_import_auctions_dialog(self, auctions):
     """
-    Display dialog to select which auctions to import
-    Provides agentic recommendations based on state
+    Display ALL wallet activity found during scan.
+    Shows wallet attribution and tracking state.
+    Sortable columns with filter + manual tracking controls.
     """
     dialog = self._create_toplevel()
-    dialog.title(f"Import Auctions - Found {len(auctions)}")
-    dialog.geometry("900x600")
+    dialog.title(f"Wallet Activity — {len(auctions)} item(s) found")
+    dialog.geometry("1100x660")
     dialog.transient(self.root)
     dialog.grab_set()
 
-    # Header
+    def close_dialog(_event=None):
+      """Close dialog."""
+      dialog.destroy()
+
+    dialog.bind("<Escape>", close_dialog)
+
     header = ttk.Label(
       dialog,
-      text=f"[OK] Found {len(auctions)} active auction(s) in wallet",
+      text=f"Auction Activity — {len(auctions)} item(s) found",
       font=("Arial", 12, "bold"),
     )
-    header.pack(pady=10)
+    header.pack(pady=(10, 2))
 
-    # Instructions
-    instructions = ttk.Label(
-      dialog,
-      text="Select auctions to import. The system will automatically determine the best action.",
-      foreground="#666",
+    legend_frame = ttk.Frame(dialog)
+    legend_frame.pack(fill="x", padx=12, pady=(0, 4))
+    ttk.Label(legend_frame, text="Legend:", font=("Arial", 9, "bold")).pack(side="left")
+    ttk.Label(legend_frame, text="  [AUTO] automated", foreground="#888888", font=("Arial", 9)).pack(side="left")
+    ttk.Label(legend_frame, text="  [WATCH] tracked-manual", foreground="#6688aa", font=("Arial", 9)).pack(side="left")
+    ttk.Label(legend_frame, text="  [!] untracked", foreground="#cc6600", font=("Arial", 9)).pack(side="left")
+
+    filter_frame = ttk.Frame(dialog)
+    filter_frame.pack(fill="x", padx=12, pady=(4, 0))
+    hide_imported_var = tk.BooleanVar(value=False)
+    hide_imported_check = ttk.Checkbutton(
+      filter_frame,
+      text="Hide already imported (automated + watched)",
+      variable=hide_imported_var,
     )
-    instructions.pack(pady=(0, 10))
+    hide_imported_check.pack(side="left")
 
-    # Auctions list frame
     list_frame = ttk.Frame(dialog)
     list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-    # TreeView for auctions
-    columns = ("Name", "State", "Bids", "Recommendation", "Details")
-    tree = ttk.Treeview(
-      list_frame, columns=columns, show="tree headings", selectmode="extended"
-    )
-
-    tree.heading("#0", text="Import")
+    columns = ("Name", "State", "Bids", "Wallet", "Tracking", "Action", "Details")
+    tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
     tree.heading("Name", text="Name")
     tree.heading("State", text="State")
     tree.heading("Bids", text="# Bids")
-    tree.heading("Recommendation", text="Action")
+    tree.heading("Wallet", text="Wallet")
+    tree.heading("Tracking", text="Tracking")
+    tree.heading("Action", text="Recommended Action")
     tree.heading("Details", text="Details")
-
-    tree.column("#0", width=60)
-    tree.column("Name", width=150)
-    tree.column("State", width=80)
-    tree.column("Bids", width=60)
-    tree.column("Recommendation", width=150)
-    tree.column("Details", width=400)
+    tree.column("Name", width=110)
+    tree.column("State", width=75)
+    tree.column("Bids", width=55)
+    tree.column("Wallet", width=120)
+    tree.column("Tracking", width=130)
+    tree.column("Action", width=210)
+    tree.column("Details", width=360)
 
     scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scrollbar.set)
-
     tree.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
+    self._make_treeview_sortable(tree, columns)
 
-    # Populate tree with auctions and recommendations
+    tree.tag_configure("automated", foreground="#888888")
+    tree.tag_configure("watched", foreground="#6688aa")
+    tree.tag_configure("untracked", foreground="#cc6600")
+    tree.tag_configure("importable", foreground="#226622")
+
     auction_items = {}
+    all_item_ids = []
     for auction in auctions:
       recommendation = self._get_import_recommendation(auction)
+      is_managed = auction.get("is_managed", False)
+      is_watched = auction.get("is_watched", False)
+      wallet = auction.get("wallet", "unknown")
+
+      if is_managed:
+        tracking_text = "[AUTO] automated"
+        row_tag = "automated"
+      elif is_watched:
+        tracking_text = "[WATCH] tracked"
+        row_tag = "watched"
+      else:
+        tracking_text = "[!] untracked"
+        row_tag = "importable" if recommendation.get("importable") else "untracked"
 
       item_id = tree.insert(
         "",
         "end",
-        text="",
         values=(
           auction["name"],
           auction["state"],
           len(auction["bids"]),
+          wallet[:20],
+          tracking_text,
           recommendation["action"],
           recommendation["details"],
         ),
+        tags=(row_tag,),
       )
+      all_item_ids.append(item_id)
       auction_items[item_id] = {
         "auction": auction,
         "recommendation": recommendation,
+        "is_managed": is_managed,
+        "is_watched": is_watched,
       }
 
-    # Select all by default
-    tree.selection_set(tree.get_children())
+    def apply_filter():
+      """Show/hide items based on filter checkbox."""
+      hide_imported = hide_imported_var.get()
+      visible_ids = []
+      for item_id in all_item_ids:
+        data = auction_items[item_id]
+        is_imported = data["is_managed"] or data["is_watched"]
+        if hide_imported and is_imported:
+          continue
+        visible_ids.append(item_id)
+      tree.set_children("", *visible_ids)
 
-    # Buttons
+    hide_imported_check.config(command=apply_filter)
+
+    default_sel = [
+      iid for iid in all_item_ids
+      if not auction_items[iid]["is_managed"] and auction_items[iid]["recommendation"].get("importable")
+    ]
+    tree.selection_set(default_sel)
+
     button_frame = ttk.Frame(dialog)
-    button_frame.pack(fill="x", padx=10, pady=10)
+    button_frame.pack(fill="x", padx=10, pady=8)
 
-    def select_all():
-      """Select all."""
-      tree.selection_set(tree.get_children())
+    def select_visible():
+      tree.selection_set(list(tree.get_children()))
 
     def deselect_all():
-      """Deselect all."""
       tree.selection_set()
 
     def import_selected():
-      """Import selected."""
       selected = tree.selection()
       if not selected:
-        messagebox.showwarning(
-          "No Selection", "Please select at least one auction to import"
-        )
+        messagebox.showwarning("No Selection", "Please select at least one item to import.")
         return
 
       imported_count = 0
+      skipped_managed = 0
       failed_count = 0
-
       for item_id in selected:
         data = auction_items[item_id]
+        if data["is_managed"]:
+          skipped_managed += 1
+          continue
         success = self._execute_import(data["auction"], data["recommendation"])
         if success:
           imported_count += 1
         else:
           failed_count += 1
 
-      # Show results
-      result_msg = f"Import complete!\n\nSuccessfully imported: {imported_count}"
-      if failed_count > 0:
-        result_msg += f"\nFailed: {failed_count}"
-
-      messagebox.showinfo("Import Complete", result_msg)
-
-      # Refresh jobs list
+      msg = f"Import complete!\n\nImported as jobs: {imported_count}"
+      if skipped_managed:
+        msg += f"\nSkipped (already automated): {skipped_managed}"
+      if failed_count:
+        msg += f"\nFailed / not importable: {failed_count}"
+      messagebox.showinfo("Import Complete", msg)
       self.refresh_jobs_list()
-
       dialog.destroy()
 
-    self._create_button(button_frame, text="Select All", command=select_all).pack(
-      side="left", padx=5
-    )
-    self._create_button(button_frame, text="Deselect All", command=deselect_all).pack(
-      side="left", padx=5
-    )
-    self._create_button(button_frame, text="Import Selected", command=import_selected).pack(
-      side="right", padx=5
-    )
-    self._create_button(button_frame, text="Cancel", command=dialog.destroy).pack(
-      side="right", padx=5
-    )
+    def track_selected():
+      selected = tree.selection()
+      if not selected:
+        messagebox.showwarning("No Selection", "Please select at least one item to track.")
+        return
+
+      tracked_count = 0
+      skipped_count = 0
+      for item_id in selected:
+        data = auction_items[item_id]
+        if data["is_managed"] or data["is_watched"]:
+          skipped_count += 1
+          continue
+        auction = data["auction"]
+        self._add_activity_watch(auction["name"], auction["wallet"], auction["bids"], auction["state"])
+        tracked_count += 1
+
+      msg = (
+        f"Added {tracked_count} item(s) to watch list.\n"
+        "These appear in Active Jobs as '[~] Tracked (Manual)'.\n\n"
+        "Manual action is required unless upgraded to automation."
+      )
+      if skipped_count:
+        msg += f"\n\nSkipped (already tracked/automated): {skipped_count}"
+      messagebox.showinfo("Track Activity", msg)
+      self.refresh_jobs_list()
+      dialog.destroy()
+
+    self._create_button(button_frame, text="Select All (visible)", command=select_visible).pack(side="left", padx=5)
+    self._create_button(button_frame, text="Deselect All", command=deselect_all).pack(side="left", padx=5)
+    self._create_button(button_frame, text="Track Activity (Manual)", command=track_selected).pack(side="right", padx=5)
+    self._create_button(button_frame, text="Import as Job", command=import_selected).pack(side="right", padx=5)
+    self._create_button(button_frame, text="Cancel", command=close_dialog).pack(side="right", padx=5)
 
   def _get_import_recommendation(self, auction):
     """
-    Agentic decision-making: determine best action for auction based on state
+    Agentic decision-making: determine best action for auction based on state.
 
-    Returns dict with 'action' and 'details' keys
+    Returns dict with 'action', 'details', 'importable', and 'manual_required' keys.
     """
-    name = auction["name"]
     state = auction["state"]
     bids = auction["bids"]
     name_info = auction["name_info"]
 
-    # Get current blockchain height
-    try:
-      current_height = self._get_current_height_silent()
-    except:
-      current_height = None
+    if auction.get("is_managed"):
+      existing = auction.get("existing_job") or {}
+      job_status = existing.get("status", "?")
+      return {
+        "action": "Already in automation",
+        "details": f"Job tracking this name (status: {job_status}). No import needed.",
+        "importable": False,
+        "manual_required": False,
+      }
+
+    watch_prefix = ""
+    if auction.get("is_watched"):
+      watch_prefix = "Tracked manually. Upgrade available. "
+
+    if state == "OPENING":
+      return {
+        "action": "Add to automation (BIDDING pending)",
+        "details": watch_prefix + "OPEN tx submitted. Will auto-bid when BIDDING starts (set bid amount after import).",
+        "importable": True,
+        "manual_required": False,
+      }
 
     if state == "BIDDING":
       if len(bids) > 0:
-        # Already placed bid, add to automation for reveal
         return {
           "action": "Add to automation (REVEAL pending)",
-          "details": f"Bid already placed. Will auto-reveal when REVEAL phase starts.",
+          "details": watch_prefix + "Bid already placed. Will auto-reveal when REVEAL phase starts.",
+          "importable": True,
+          "manual_required": False,
         }
-      else:
-        # No bid yet - can't auto-add without bid amount
-        return {
-          "action": "[!] Cannot import",
-          "details": "No bids placed yet. Place bid manually first.",
-        }
+      return {
+        "action": "[!] No bid placed",
+        "details": "No bids from this wallet found. Manual bid required, or track as activity.",
+        "importable": False,
+        "manual_required": True,
+      }
 
-    elif state == "REVEAL":
+    if state == "REVEAL":
       if len(bids) > 0:
-        # Need to reveal
         unrevealed = [b for b in bids if not b.get("revealed", False)]
         if unrevealed:
           return {
             "action": "Execute REVEAL immediately",
-            "details": f"{len(unrevealed)} bid(s) need revealing. Will reveal now.",
+            "details": watch_prefix + f"{len(unrevealed)} bid(s) need revealing. Will reveal now.",
+            "importable": True,
+            "manual_required": False,
           }
-        else:
-          # Already revealed, add to automation for register
-          return {
-            "action": "Add to automation (REGISTER pending)",
-            "details": "Bids revealed. Will auto-register if won.",
-          }
-      else:
-        # No bids in REVEAL? Auction lost or error
         return {
-          "action": "[!] Skip",
-          "details": "No bids found. May have been revealed already or auction lost.",
+          "action": "Add to automation (REGISTER pending)",
+          "details": watch_prefix + "Bids revealed. Will auto-register if won.",
+          "importable": True,
+          "manual_required": False,
         }
+      return {
+        "action": "[!] No wallet bids found",
+        "details": "In REVEAL phase but no wallet bids detected. Manual reveal may be needed.",
+        "importable": False,
+        "manual_required": True,
+      }
 
-    elif state == "CLOSED":
-      # Check if we won or lost
+    if state == "CLOSED":
       owner = name_info.get("owner", {})
       can_register = name_info.get("canRegister", False)
 
       if owner:
-        # Already registered by someone - check if it was us
-        # If we have revealed bids, we might need to redeem
         if len(bids) > 0:
           revealed_bids = [b for b in bids if b.get("revealed", False)]
           if revealed_bids:
             return {
               "action": "Execute REDEEM immediately",
-              "details": "Auction lost. Will redeem locked funds now.",
+              "details": watch_prefix + "Auction lost. Will redeem locked funds now.",
+              "importable": True,
+              "manual_required": False,
             }
         return {
-          "action": "[!] Skip",
-          "details": "Auction closed. Name already registered.",
+          "action": "[~] Activity only",
+          "details": "Auction closed. Name already registered. No automation action needed.",
+          "importable": False,
+          "manual_required": False,
         }
-      else:
-        # Not registered yet - check if we can register
-        if can_register:
+
+      if can_register:
+        return {
+          "action": "Execute REGISTER immediately",
+          "details": watch_prefix + "Auction won! Will register name now.",
+          "importable": True,
+          "manual_required": False,
+        }
+
+      if len(bids) > 0:
+        revealed_bids = [b for b in bids if b.get("revealed", False)]
+        if revealed_bids:
           return {
-            "action": "Execute REGISTER immediately",
-            "details": "Auction won! Will register name now.",
+            "action": "Execute REDEEM immediately",
+            "details": watch_prefix + "Auction lost. Will redeem locked funds now.",
+            "importable": True,
+            "manual_required": False,
           }
-        elif len(bids) > 0:
-          # We have bids but can't register - we lost
-          revealed_bids = [b for b in bids if b.get("revealed", False)]
-          if revealed_bids:
-            return {
-              "action": "Execute REDEEM immediately",
-              "details": "Auction lost. Will redeem locked funds now.",
-            }
-          else:
-            return {
-              "action": "[!] Skip",
-              "details": "Auction closed but bids not revealed. Cannot redeem.",
-            }
-        else:
-          return {
-            "action": "[!] Skip",
-            "details": "Auction closed. No action needed.",
-          }
+        return {
+          "action": "[!] Manual action required",
+          "details": "Auction closed, bids not revealed — funds may be locked. Manual check needed.",
+          "importable": False,
+          "manual_required": True,
+        }
+
+      return {
+        "action": "[~] Activity only",
+        "details": "Auction closed. No pending wallet action detected.",
+        "importable": False,
+        "manual_required": False,
+      }
 
     return {
-      "action": "[!] Unknown state",
-      "details": f"State '{state}' not recognized.",
+      "action": "[~] Activity only",
+      "details": f"State '{state}' — manual action required if needed.",
+      "importable": False,
+      "manual_required": True,
     }
 
   def _execute_import(self, auction, recommendation):
@@ -11505,17 +12768,26 @@ to access config and log files!
 
     try:
       # Check if already in automation
-      existing_job = self.get_job_by_name(name)
-      if existing_job and existing_job.get("status") not in [
-        "completed",
-        "failed",
-        "lost",
-      ]:
+      existing_job = self.get_job_by_name(name, wallet)
+      if (
+        existing_job
+        and not existing_job.get("watch_only", False)
+        and existing_job.get("status") not in [
+          "completed",
+          "failed",
+          "lost",
+        ]
+      ):
         self.log(f"[!] Auction '{name}' already in automation, skipping")
         return False
 
-      if "Cannot import" in action or "Skip" in action:
-        self.log(f"[!] Skipping '{name}': {recommendation['details']}")
+      if not recommendation.get("importable", True) and (
+        "Cannot import" in action
+        or "Skip" in action
+        or "Activity only" in action
+        or "Already in automation" in action
+      ):
+        self.log(f"[!] Skipping '{name}' (not importable): {recommendation['details']}")
         return False
 
       if "Execute REVEAL immediately" in action:
@@ -11573,11 +12845,19 @@ to access config and log files!
           status = "bid_placed"
         elif "REGISTER pending" in action:
           status = "revealed"
+        elif "BIDDING pending" in action:
+          status = "opened"
         else:
           status = "opened"
 
         self._add_imported_job(name, wallet, bids, status)
-        self.log(f"[OK] Added to automation: {name} (status: {status})")
+        if "BIDDING pending" in action:
+          self.log(
+            f"[OK] Added to automation: {name} (status: {status})"
+            f" — set bid amount in job settings before BIDDING starts"
+          )
+        else:
+          self.log(f"[OK] Added to automation: {name} (status: {status})")
         return True
 
       return False
@@ -11611,10 +12891,34 @@ to access config and log files!
         if lockup > lockup_amount:
           lockup_amount = lockup
 
+    jobs_data = self.load_auction_jobs()
+
+    # Promote an existing watch entry to automation when name+wallet match.
+    for job in jobs_data.get("jobs", []):
+      if (
+        job.get("name") == name
+        and job.get("wallet") == wallet
+        and job.get("watch_only", False)
+        and job.get("status") not in ["registered", "lost", "failed"]
+      ):
+        job["watch_only"] = False
+        job["status"] = status
+        job["auto_enabled"] = True
+        job["auto_bid_enabled"] = True
+        job["imported"] = True
+        job["updated_at"] = datetime.now().isoformat()
+        job["bid_amount"] = bid_amount
+        job["original_bid_amount"] = bid_amount
+        job["lockup_amount"] = lockup_amount
+        self.save_auction_jobs(jobs_data)
+        self.log(
+          f"[*][YEN] Promoted watch entry to automation: {name} "
+          f"(ID: {job.get('id', '')[:8]}..., Status: {status})"
+        )
+        return
+
     # Create job
     job_id = str(uuid.uuid4())
-
-    jobs_data = self.load_auction_jobs()
 
     new_job = {
       "id": job_id,
@@ -11644,6 +12948,64 @@ to access config and log files!
     self.save_auction_jobs(jobs_data)
 
     self.log(f"[*][YEN] Imported job: {name} (ID: {job_id[:8]}..., Status: {status})")
+
+  def _add_activity_watch(self, name, wallet, bids, state):
+    """
+    Add a manual watch entry to the jobs list (no automation).
+    Shows in the Jobs list as '[~] Tracked (Manual)'.
+    """
+    existing = self.get_job_by_name(name, wallet)
+    if existing and existing.get("watch_only"):
+      self.log(f"[~] '{name}' already in watch list, skipping")
+      return
+
+    bid_amount = 0.0
+    lockup_amount = 0.0
+    if bids:
+      for bid in bids:
+        value = self._to_float(bid.get("value", 0))
+        lockup = self._to_float(bid.get("lockup", 0))
+        if value > 1_000_000:
+          value /= 1_000_000
+        if lockup > 1_000_000:
+          lockup /= 1_000_000
+        if value > bid_amount:
+          bid_amount = value
+        if lockup > lockup_amount:
+          lockup_amount = lockup
+
+    job_id = str(uuid.uuid4())
+    jobs_data = self.load_auction_jobs()
+    now = datetime.now().isoformat()
+    new_job = {
+      "id": job_id,
+      "name": name,
+      "wallet": wallet,
+      "bid_amount": bid_amount,
+      "original_bid_amount": bid_amount,
+      "lockup_amount": lockup_amount,
+      "status": "manual_watch",
+      "auto_enabled": False,
+      "auto_bid_enabled": False,
+      "created": now,
+      "created_at": now,
+      "updated_at": now,
+      "txids": {"open": None, "bid": None, "reveal": [], "register": None},
+      "block_heights": {
+        "opened_at": None,
+        "bid_placed_at": None,
+        "revealed_at": None,
+        "registered_at": None,
+      },
+      "error_log": [],
+      "retry_count": 0,
+      "imported": True,
+      "watch_only": True,
+      "chain_state": state,
+    }
+    jobs_data["jobs"].append(new_job)
+    self.save_auction_jobs(jobs_data)
+    self.log(f"[~] Watch entry added: {name} (state: {state}, ID: {job_id[:8]}...)")
 
   # ========================================================================
   # AUCTION AUTOMATION - STAGE 0: FOUNDATION (CRUD METHODS)
@@ -11826,9 +13188,12 @@ to access config and log files!
       self.log(f"Error updating job status: {e}")
       return False
 
-  def get_job_by_name(self, name):
+  def get_job_by_name(self, name, wallet=None):
     """
-    Find an active job by name
+    Find an active job by name (and optionally by wallet).
+
+    If wallet is None, returns any active job with that name.
+    If wallet is specified, returns only active jobs with that name+wallet.
 
     Returns:
       dict: Job data if found, None otherwise
@@ -11843,6 +13208,8 @@ to access config and log files!
           "lost",
           "failed",
         ]:
+          if wallet is not None and job.get("wallet") != wallet:
+            continue
           return job
 
       return None
