@@ -2,9 +2,7 @@
 
 > **Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026**
 
-A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, wallets, and name auctions.
-
-This is the stable production-ready version with comprehensive feature coverage. It includes built-in pool mining support with auto-detection and version checking, complete auction automation workflows (open → bid → reveal → register) with email notifications, and safe version checking and updating for miner and FBD binaries. The application offers both legacy ttk and modern rounded CustomTkinter UI modes, robust error handling with auto-restart and recovery, multi-profile support for saving and loading different configurations, and runs seamlessly across Linux, WSL, and Windows platforms.
+A comprehensive graphical interface for managing FBD (Fistbump) nodes, mining, wallets, and name auctions on Linux, WSL, and Windows platforms.
 
 ##  Platform Compatibility
 

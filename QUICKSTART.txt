@@ -12,15 +12,6 @@ For Pool Mining          → See "MINING QUICK REFERENCE"
 For Name Auctions        → See "AUCTION QUICK REFERENCE"
 For Troubleshooting      → Scroll to "COMMON ISSUES"
 
-The v5-1-0 release is production-ready with built-in pool mining 
-support including auto-version checking, complete auction automation 
-workflows from open through registration with email notifications, 
-safe version checking and updating for miner and FBD binaries, both 
-legacy ttk and modern rounded CustomTkinter UI modes, robust error 
-handling with auto-restart and recovery, multi-profile support for 
-different mining setups, and seamless cross-platform execution across 
-Linux, WSL, and Windows environments.
-
  PLATFORM NOTES:
 ───────────────────────────────────────────────────────────────
 This is a Linux-native Python application:
