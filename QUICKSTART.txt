@@ -1,5 +1,5 @@
 ╔══════════════════════════════════════════════════════════════╗
-║              FBD GUI v5-1-0 QUICK START GUIDE                ║
+║              FBD GUI v6-0-0 QUICK START GUIDE                ║
 ║     Created by 'voding' [vibe-coding] - copilot+timaxal     ║
 ║                        April 2026                            ║
 ╚══════════════════════════════════════════════════════════════╝
@@ -46,7 +46,7 @@ APPEARANCE:
 CURRENT FILES:
 
 Core Application:
-  • fbd_wslgui.py              - Main GUI (v5-1-0)
+  • fbd_wslgui.py              - Main GUI (v6-0-0)
   • fbd_wslgui.test.py         - Test version
   • fbd_wslgui.3-0-0.py        - Archived stable
 

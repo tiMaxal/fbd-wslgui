@@ -11356,87 +11356,190 @@ class FBDManager:
     def show_help(self):
         """Display help dialog with quick reference"""
         help_text = """
-FBD Node Manager v6.0.0 - Quick Help
+FBD Node Manager - Quick Help
 
-PLATFORM:
-* Linux-native Python app (runs on native Linux, WSL, or Windows via WSL)
-* "wslgui" name reflects original WSL development environment
-* Core app is standard cross-platform Python/Tkinter
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLATFORM & RUNNING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Linux-native Python/Tkinter app; runs on native Linux,
+WSL, or Windows via WSL.
+  Windows:   double-click fbd-wslgui_launch.bat (auto X11 setup)
+  Linux/WSL: python3 fbd_wslgui.py
 
-DEPENDENCIES:
-* Python 3.6+ with tkinter (python3-tk)
-* python3-requests library
-* Auto-checked on startup with install offers
+DEPENDENCIES (auto-checked/installed on startup):
+  Required: python3-tk, python3-requests
+  Optional: customtkinter (rounded UI toolkit)
 
-[!] REQUIRED BINARIES:
-* fbd & fbdctl NOT included in repo (file size)
-* Download: https://fbd.dev/download/fbd-latest-linux-x86_64.zip
-* Extract and place in same directory as this app
-* chmod +x fbd fbdctl
-* Keep updated by re-downloading latest zip
+[!] REQUIRED BINARIES (NOT included – download separately):
+  fbd + fbdctl
+    https://fbd.dev/download/fbd-latest-linux-x86_64.zip
+    Extract to same folder as this app; chmod +x fbd fbdctl
+  miner (for pool mining)
+    https://l.woodburn.au/miner
+    Place in same folder; chmod +x miner
 
-DOCUMENTATION:
-* README.md - Complete usage guide
-* QUICKSTART.txt - Quick start reference
-* ai-hist_fbd-wslgui/ - Archived docs & older versions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NODE & MINING TAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+First-time setup:
+  Settings Tab -> Set FBD path (e.g. ./fbd-latest-linux-x86_64/fbd)
+  Node & Mining -> Choose network (main/testnet/regtest/simnet)
+  Enable index options as needed (tx / address / auctions)
 
-GETTING STARTED:
-1. Download fbd & fbdctl binaries (see above)
-2. Settings Tab -> Set FBD path (e.g., ./fbd or ./fbd-latest-linux-x86_64/fbd)
-3. Node & Mining Tab -> Configure network & miner address
-4. Click "Start Node"
+Start/Stop Node:
+  "Start Node" launches fbd with all configured settings.
+  "Stop Node" cleanly terminates the process.
+  Status bar shows: block height, peer count, restart count.
+  Log shows live output; "Clear Log" clears the visible display.
 
-MINING (Two Modes - Choose One):
+Network ports  P2P   / RPC
+  main:    32867 / 32868     testnet: 42867 / 42868
+  regtest: 52867 / 52868     simnet:  62867 / 62868
 
-  SOLO MINING:
-  * Enable Mining checkbox: CHECKED
-  * Set miner address & threads
-  * Click "Start Node"
-  * Keep 100% of block rewards
-  -> For dedicated miners
+Auto-Restart: Settings -> enable to restart automatically on crash.
 
-  POOL MINING (Recommended):
-  * Enable Mining checkbox: UNCHECKED
-  * Set pool wallet address & host
-  * Click "Start Pool Miner" button
-  * Consistent payouts, no full node needed
-  * Settings -> Check Miner Version (compare local vs latest)
-  * Settings -> Check & Auto-Update Miner (updates only when needed)
-  -> For casual miners
+SOLO MINING (100% block rewards):
+  Miner Address: your FBC wallet address
+  Miner Threads: 0 (auto) or CPU cores - 1
+  Check "Enable Mining" -> Click "Start Node"
+  [!] Requires full node running; higher reward variance.
 
-  [!] Cannot run BOTH simultaneously!
+POOL MINING (consistent payouts – recommended for most):
+  Pool Miner Wallet: your FBC address
+  Pool Host: pool.woodburn.au  |  Threads: 0 (auto)
+  Uncheck "Enable Mining"
+  Click "Start Pool Miner" (runs independently of node)
+  You mine as: youraddress.wslgui – pool takes a small fee.
+  [!] Cannot run BOTH mining modes simultaneously.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WALLET TAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  List Wallets     – show all wallets on the running node
+  Create Wallet    – new wallet; SAVE the mnemonic phrase!
+  Import Wallet    – restore from mnemonic or private key
+  Delete Wallet    – permanently removes wallet from node
+  Get Wallet Info  – balance breakdown, address, mining count
+  Copy Address     – receive address with one-click clipboard copy
+  Send Payment     – enter recipient address + amount then Send
+  Load Transactions – full history; click row for block explorer
 
-WALLET:
-* List/Create wallets in Wallet tab
-* Get balance, send payments, view transactions
-* Remember to save your wallet mnemonic!
+Active Wallet dropdown sets the context for all wallet actions.
 
-AUCTIONS:
-* Get name info -> Open -> Bid -> Reveal -> Register
-* View owned names with "Load My Names"
-* Automation available in Auction Automation tab
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AUCTIONS TAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Name lifecycle:
+  Enter name -> Get Name Info   (check state and timing)
+  INACTIVE -> Open Auction      (sends open tx; pays fee)
+  BIDDING  -> Place Bid         (bid amount + lockup >= bid)
+  REVEAL   -> Reveal Bid        (submits your committed bid)
+  Closed   -> Register          (claims the name if you won)
 
-[!] SETTINGS:
-* Save/load configurations
-* Export/import for backup
-* Configure auto-restart & indexing
-* Manage miner URL and safe version-checked auto-update
-* Manage FBD package URL and safe fbd/fbdctl auto-update
-* Startup checks for both miner and fbd/fbdctl with Update Now or Do Later
+Repair Bid – fix a bid with blind/lockup mismatch before reveal.
+Load My Names – all names registered to the active wallet.
+  Right-click a name -> Manage DNS Records
 
-FILES LOCATION:
-* Config: ~/.fbdgui/fbdgui_config.json
-* Profiles: ~/.fbdgui/profiles/
-* Logs: ~/.fbdgui/fbdgui.log
+DNS Manager (right-click any name in My Names):
+  Add / Edit / Remove: A, AAAA, CNAME, TXT, MX, NS, DS, etc.
+  "Save to Chain" publishes the record update on-chain.
+  Help button opens FBD DNS documentation.
 
-RESOURCES:
-* FBD Docs: https://fbd.dev
-* Explorer: https://explorer.fistbump.org/
-* Whitepaper: https://fistbump.org/fistbump.txt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AUCTION AUTOMATION TAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Automated job engine handles the full auction lifecycle:
+  Place Bid in Auctions tab -> check "Add to Automation", or
+  Automation tab -> fill name, wallet, bid, lockup -> Start Job
+  Background monitor runs every ~60 s regardless of tab focus.
+  Jobs auto-advance: open -> bid -> reveal -> register.
 
-[*]! TIP: Use File -> Open GUI Config Directory
-to access config and log files!
+Job Manager:
+  View all jobs with status, name, bid, progress, and timing.
+  View Job Details   – full timeline and bid history
+  Cancel Job         – stops automation; leaves chain state intact
+  Clear Completed    – removes finished/failed entries from list
+  Right-click -> Block Calculator (timing lookup for that name)
+
+Import Existing Auctions:
+  Import -> Scan Wallet Auctions – detects in-progress auctions
+  Manual Import – add a known name directly
+  Scan All Wallets – batch scan across all wallets
+  Recommended action shown for each detected auction state.
+
+Watchlist:
+  Track names of interest; get alerts when auction state changes.
+  Add to Watchlist from context menu or Watchlist Manager.
+  Automatically offers bid dialog when watched name enters BIDDING.
+
+Rollout Reminders:
+  Block-based reminder for upcoming name release blocks.
+  Reminder Manager – view, add, and remove scheduled reminders.
+
+Email Notifications (configure in Settings -> Email):
+  SMTP server, port, credentials, and destination address.
+  Send Test Email verifies connectivity.
+  Emails fire on critical events: won, lost, failed.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BLOCK CALCULATOR TAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Lookup by Name – live block numbers and state from running node
+  Manual Entry   – enter open block manually for offline estimates
+  Displays: open / bid-start / reveal-start / close / renewal /
+            redeem-deadline blocks with estimated dates and times
+            (based on 10-min average block time)
+  Refresh Current Block – updates live block height for estimates
+  Clear – resets displayed results
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SETTINGS TAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FBD Configuration:
+  FBD Path – path to fbd binary
+  RPC Host / Port – auto-set by network; override only if needed
+  Custom datadir – leave blank for default ~/.fbd/
+  Index options: transactions, addresses, auctions
+  Auto-Restart on crash; configurable restart delay
+
+Binary Updates (hash-safe, non-destructive):
+  Miner URL (default: https://l.woodburn.au/miner)
+    Check Miner Version    – compare local vs remote SHA256
+    Check & Auto-Update Miner – replace only when different
+  FBD Package URL (default: fbd-latest-linux-x86_64.zip)
+    Check FBD Version      – compare local fbd vs latest package
+    Check & Auto-Update FBD – update fbd+fbdctl only when different
+  On startup both checks run; prompted once if updates available.
+
+Configuration Profiles:
+  Save / Load / Update / Delete named profiles
+  Stored in ~/.fbdgui/profiles/; easy multi-setup switching.
+
+Appearance:
+  Theme: Same as system / Dark / Light
+  UI toolkit: Legacy ttk (default) or Rounded CustomTkinter
+  Install CustomTkinter from Settings if not yet present.
+
+Email Notifications:
+  SMTP server, port, from/to addresses, password.
+  Send Test Email to verify; critical events trigger auto-emails.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE LOCATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Config:   ~/.fbdgui/fbdgui_config.json
+  Profiles: ~/.fbdgui/profiles/
+  Log:      ~/.fbdgui/fbdgui.log
+  Node:     ~/.fbd/  (default datadir)
+  File -> Open GUI Config Directory opens the config folder.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESOURCES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FBD Docs:   https://fbd.dev
+  Explorer:   https://explorer.fistbump.org/
+  Whitepaper: https://fistbump.org/fistbump.txt
+  README.md and QUICKSTART.txt in this directory for full reference.
 """
 
         # Create custom dialog

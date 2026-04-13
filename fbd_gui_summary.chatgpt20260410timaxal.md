@@ -1,4 +1,4 @@
-# FBD GUI App – Capability Summary - v5-1-0
+# FBD GUI App – Capability Summary - v6-0-0
 
 **Stable production-ready build** with comprehensive node, mining, wallet, and auction management.
 

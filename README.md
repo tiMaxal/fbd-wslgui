@@ -1,4 +1,4 @@
-#  FBD Node Manager GUI v5-1-0
+#  FBD Node Manager GUI v6-0-0
 
 > **Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026**
 
@@ -102,7 +102,7 @@ Runs the test version (fbd_wslgui.test.py) separately.
 
 ### Core Files
 
-- **fbd_wslgui.py** - Main application (v5-1-0)
+- **fbd_wslgui.py** - Main application (v6-0-0)
 - **fbd_wslgui.test.py** - Test version for development
 - **fbd_wslgui.3-0-0.py** - Archived stable v3.0.0
 
@@ -708,7 +708,8 @@ chmod +x fbd fbdctl
 
 ## Version History
 
-- **v0-5-0** (Current) - Production release with rounded UI toolkit option and dependency auto-install updates
+- **v6-0-0** (Current) - Full automation, DNS manager, configurable binary updates, watchlist & rollout reminders, profile management, rounded UI toolkit option
+- **v5-1-0** - Production release with rounded UI toolkit option and dependency auto-install updates
 - **v3.0.0** - Earlier production release with auction automation
 - **v2.0.0** - Enhanced auction features (archived)
 - **v1.0.0** - Initial release (archived)
