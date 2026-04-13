@@ -100,6 +100,29 @@ Current v0-5-0 behavior already supports Light/Dark/System theme modes in Legacy
 
 ## Low Priority / Ideas
 
+### Block Calc: "Current" Phase Status Label
+
+**Status:** Planned  
+**Created:** April 13, 2026
+
+The block calculator phase timeline should indicate which phase is actively in progress, not just label elapsed phases as "Past".
+
+**Requirements:**
+
+- [ ] When the current block height falls within a phase's range, label that phase "Current" rather than "Past"
+- [ ] BIDDING phase: show "Current" from BIDDING start block until REVEAL start block
+- [ ] REVEAL phase: show "Current" from REVEAL start block until CLOSED/REGISTER start block
+- [ ] CLOSED/REGISTER phase: show "Current" from its start block onward (until next cycle if applicable)
+- [ ] Past phases that have fully elapsed keep the "Past" label as before
+- [ ] Future phases remain unlabeled or "Upcoming" as before
+
+**Implementation Notes:**
+
+- Logic requires comparing current block height against computed phase boundary blocks
+- Should integrate cleanly into existing block calc phase display row rendering
+
+---
+
 ### Donate Button in Settings Tab
 
 **Status:** Planned  
