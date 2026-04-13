@@ -37,6 +37,7 @@ The wallet transfer interface should cover both FBC transfers and protocol-level
 
 **Requirements:**
 - [ ] Add wallet UI for protocol-level name transfer operations
+- [ ] Extend the existing "send from wallet" flow so it supports both FBC coin sends and name transfers from the same wallet context
 - [ ] Integrate name transfer into the existing wallet usage flow, not as a separate hidden/admin-only tool
 - [ ] Let users select an owned name from the active wallet and transfer it to a recipient
 - [ ] Validate ownership, wallet selection, recipient format, and protocol preconditions before submission
@@ -47,6 +48,27 @@ The wallet transfer interface should cover both FBC transfers and protocol-level
 - Treat name transfer as part of day-to-day wallet operations
 - Reuse active wallet selection and existing RPC/fbdctl command plumbing where possible
 - Add clear status/error handling so protocol failures are understandable from the wallet screen
+
+---
+
+### Manual `fbdctl` CLI Interface
+**Status:** Planned  
+**Created:** April 13, 2026
+
+The GUI should expose a direct CLI-style interface for advanced/manual `fbdctl` usage without requiring users to leave the app.
+
+**Requirements:**
+- [ ] Add a dedicated UI panel/console for entering manual `fbdctl` commands
+- [ ] Support running commands against the current active wallet/node context when applicable
+- [ ] Show stdout/stderr, exit status, and structured error feedback clearly
+- [ ] Preserve command history for the current session and optionally across restarts
+- [ ] Guard dangerous/destructive commands with confirmation prompts where appropriate
+- [ ] Document supported usage patterns and any intentional restrictions
+
+**Implementation Notes:**
+- Reuse existing subprocess / command execution plumbing where possible
+- Keep this as an advanced/manual tool distinct from guided wallet actions
+- Consider optional shortcuts/templates for common commands to reduce syntax errors
 
 ---
 
