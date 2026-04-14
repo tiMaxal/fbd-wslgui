@@ -139,6 +139,24 @@ Add a donation link/button at the bottom of the Settings tab to support project 
 
 **Implementation Notes:**
 
-- Position at bottom of Settings panel
+- Position at bottom of Settings panel, above Github link/button
 - Consider icon + text or subtle link styling
 - Define donation URL/address before implementing
+
+### github Button in Settings Tab
+
+**Status:** Planned  
+**Created:** April 13, 2026
+
+Add a 'Github/tiMaxal/fbd-wslgui' link/button at the bottom of the Settings tab to support project and allow users to contribute.
+
+**Requirements:**
+
+- [ ] Add a "Github" button/link at the bottom of the Settings tab UI
+- [ ] [Link to project donation page [Github/tiMaxal/fbd-wslgui](https://github.com/tiMaxal/fbd-wslgui)]
+- [ ] Keep styling consistent with the rest of the Settings interface
+
+**Implementation Notes:**
+
+- Position at bottom of Settings panel
+- Define Github URL/address before implementing
