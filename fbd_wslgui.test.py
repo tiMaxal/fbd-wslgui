@@ -423,7 +423,7 @@ def check_and_install_dependencies():
             print(f"Error: {e}")
             sys.exit(1)
 
-    if optional_missing_packages and not _optional_customtkinter_prompt_seen():
+    if optional_missing_packages and not _optional_customtkinter_prompt_seen() and "--doc-mode" not in sys.argv:
         print("\n" + "=" * 70)
         print("[i] OPTIONAL ROUNDED UI DEPENDENCY")
         print("=" * 70)
@@ -14412,8 +14412,144 @@ RESOURCES
             return False
 
 
+    def _start_doc_mode(self):
+        """Drive the notebook through all tabs for automated UI documentation capture.
+
+        Writes /tmp/fbdwslgui_doc_ready.flag with a label after selecting each tab.
+        An external capture script watches the sentinel, takes a screenshot, then
+        deletes the file to ACK.  Runs entirely inside the Tk event loop via after().
+
+        Pass --doc-theme=dark on the CLI to override the default light theme.
+        """
+        import pathlib as _pl
+        import sys as _sys
+
+        sentinel = _pl.Path("/tmp/fbdwslgui_doc_ready.flag")
+        out_dir = _pl.Path("fbdwslgui_docs_screens") / "docmode"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        sentinel.unlink(missing_ok=True)
+
+        # ── Theme ────────────────────────────────────────────────────────────
+        # Default to light for documentation; override with --doc-theme=dark.
+        doc_theme = "light"
+        for _arg in _sys.argv:
+            if _arg.startswith("--doc-theme="):
+                doc_theme = _arg.split("=", 1)[1].strip().lower()
+        try:
+            self.theme_mode_var.set(doc_theme)
+            if hasattr(self, "theme_choice_var") and doc_theme in self.theme_mode_labels:
+                self.theme_choice_var.set(self.theme_mode_labels[doc_theme])
+            self.apply_theme()
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+        # ── Sequence ─────────────────────────────────────────────────────────
+        # Each entry: (tab_name, screenshot_label, delay_ms, scroll_fraction)
+        # scroll_fraction 0.0 = top, 1.0 = bottom.  Two shots per tab cover
+        # all content regardless of screen height.
+        sequence = [
+            ("Node & Mining", "01_node_mining_top",    500, 0.0),
+            ("Node & Mining", "01_node_mining_bottom", 200, 1.0),
+            ("Wallet",        "02_wallet",             500, 0.0),
+            ("Auctions",      "03_auctions_top",       500, 0.0),
+            ("Auctions",      "03_auctions_middle",    200, 0.25),
+            ("Auctions",      "03_auctions_bottom",    200, 1.0),
+            ("Block Calc",    "04_block_calc",         500, 0.0),
+            ("Settings",      "05_settings_top",       500, 0.0),
+            ("Settings",      "05_settings_bottom",    200, 1.0),
+        ]
+
+        # ── X11 window ID ────────────────────────────────────────────────────
+        try:
+            _wid = self.root.winfo_id()
+        except Exception:
+            _wid = 0
+
+        # ── Geometry ─────────────────────────────────────────────────────────
+        _original_geometry = self.root.winfo_geometry()
+        try:
+            self.root.geometry("1280x900")
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+        def _restore_geometry():
+            try:
+                self.root.geometry(_original_geometry)
+            except Exception:
+                pass
+
+        # ── Canvas scroll helper ─────────────────────────────────────────────
+        def _find_canvas(widget):
+            """Recursively find the first tk.Canvas child."""
+            if isinstance(widget, tk.Canvas):
+                return widget
+            for child in widget.winfo_children():
+                result = _find_canvas(child)
+                if result:
+                    return result
+            return None
+
+        def _scroll_tab_to(fraction):
+            """Scroll the active tab's canvas to fraction (0.0=top, 1.0=bottom)."""
+            try:
+                if self.customtkinter_active:
+                    tab_name = self.notebook.get()
+                    tab_widget = self.notebook.tab(tab_name)
+                else:
+                    sel = self.notebook.select()
+                    tab_widget = self.root.nametowidget(sel)
+                cv = _find_canvas(tab_widget)
+                if cv:
+                    cv.yview_moveto(fraction)
+                    self.root.update_idletasks()
+            except Exception:
+                pass
+
+        # ── Sequence driver ──────────────────────────────────────────────────
+        _prev_tab = [None]
+
+        def step(index):
+            if index >= len(sequence):
+                sentinel.write_text("DONE")
+                _restore_geometry()
+                print("[doc-mode] Sequence complete.")
+                return
+            tab_name, label, delay_ms, scroll_frac = sequence[index]
+            if _prev_tab[0] != tab_name:
+                print(f"[doc-mode] Selecting tab: {tab_name}")
+                self._notebook_select(tab_name)
+                _prev_tab[0] = tab_name
+
+            def signal_ready():
+                _scroll_tab_to(scroll_frac)
+                try:
+                    self.root.update_idletasks()
+                    self.root.update()
+                except Exception:
+                    pass
+                pos = "top" if scroll_frac == 0.0 else "bottom" if scroll_frac == 1.0 else f"{int(scroll_frac * 100)}pct"
+                print(f"[doc-mode] {tab_name!r} {pos} → {label}")
+                sentinel.write_text(f"{label}:{_wid}")
+
+                def wait_for_ack():
+                    if sentinel.exists():
+                        self.root.after(100, wait_for_ack)
+                    else:
+                        self.root.after(200, lambda: step(index + 1))
+
+                wait_for_ack()
+
+            self.root.after(delay_ms, signal_ready)
+
+        print("[doc-mode] Starting automated tab walkthrough in 1 s ...")
+        self.root.after(1000, lambda: step(0))
+
 def main():
     """Main."""
+    doc_mode = "--doc-mode" in sys.argv
+
     toolkit_mode = _resolve_startup_ui_toolkit()
     if toolkit_mode == UI_TOOLKIT_CUSTOMTK and ctk is not None:
         root = ctk.CTk()
@@ -14430,6 +14566,8 @@ def main():
     )
     app = FBDManager(root)
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    if doc_mode:
+        app._start_doc_mode()
     root.mainloop()
 
 
