@@ -286,8 +286,9 @@ set "PATH_REST=%SCRIPT_DIR_SLASH:~2%"
 set "WSL_PATH=/mnt/%DRIVE_LETTER%%PATH_REST%"
 
 REM Launch in default WSL distro (venv is used when present)
-wsl -e bash -c "cd $1 && if [ -f .venv-wslgui/bin/activate ]; then . .venv-wslgui/bin/activate; fi && python3 -u fbd_wslgui.test.py" _ "%WSL_PATH%" 2>&1
-
+REM old lauch line
+REM wsl -e bash -c "cd $1 && if [ -f .venv-wslgui/bin/activate ]; then . .venv-wslgui/bin/activate; fi && python3 -u fbd_wslgui.test.py" _ "%WSL_PATH%" 2>&1
+wsl -e bash -c "export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0; cd '%WSL_PATH%' && if [ -f .venv-wslgui/bin/activate ]; then . .venv-wslgui/bin/activate; fi && python3 -u fbd_wslgui.test.py"
 echo.
 echo GUI closed.
 echo.

@@ -1,4 +1,5 @@
 ﻿#!/usr/bin/env python3
+
 """
 FBD Node Manager GUI
 A graphical interface for managing FBD node, mining, wallet, and auctions.
@@ -6,6 +7,26 @@ Linux-native Python app (runs on native Linux, WSL, or Windows via WSL).
 
 Created by 'voding' [vibe-coding] - copilot+timaxal, April 2026
 """
+
+# --- Ensure x11-apps is installed for X11 test utilities (xeyes/xclock) ---
+import shutil
+import sys
+
+
+def _ensure_x11_apps():
+    if shutil.which("xeyes") is None:
+        print("[INFO] xeyes not found. Installing x11-apps for X11 test utilities...")
+        try:
+            import subprocess
+
+            subprocess.run(["sudo", "apt-get", "update"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y", "x11-apps"], check=True)
+        except Exception as e:
+            print(f"[WARN] Could not auto-install x11-apps: {e}")
+            pass
+
+
+_ensure_x11_apps()
 
 # ============================================================================
 # DEPENDENCY CHECKER - Runs before imports to ensure packages are available
@@ -423,7 +444,11 @@ def check_and_install_dependencies():
             print(f"Error: {e}")
             sys.exit(1)
 
-    if optional_missing_packages and not _optional_customtkinter_prompt_seen() and "--doc-mode" not in sys.argv:
+    if (
+        optional_missing_packages
+        and not _optional_customtkinter_prompt_seen()
+        and "--doc-mode" not in sys.argv
+    ):
         print("\n" + "=" * 70)
         print("[i] OPTIONAL ROUNDED UI DEPENDENCY")
         print("=" * 70)
@@ -1447,15 +1472,16 @@ class AuctionMonitor:
                         )
                         # Reset retry count and let normal retry logic handle the next reveal.
                         job["retry_count"] = 0
-                        self.manager.update_job_runtime_fields(
-                            job["id"], retry_count=0
-                        )
+                        self.manager.update_job_runtime_fields(job["id"], retry_count=0)
                         # Attempt reveal immediately now that bid data is repaired.
-                        reveal_after_repair = self.manager.execute_send_reveal_silent(name, wallet)
+                        reveal_after_repair = self.manager.execute_send_reveal_silent(
+                            name, wallet
+                        )
                         if reveal_after_repair.get("success"):
                             txids = reveal_after_repair.get("txids", [])
                             self.manager.update_job_status(
-                                job["id"], "revealed",
+                                job["id"],
+                                "revealed",
                                 txid=txids,
                                 block_height=self._get_current_height(),
                                 retry_count=0,
@@ -1803,7 +1829,9 @@ class FBDManager:
         # Initialize settings-backed vars before any tab can trigger background refresh.
         self.fbd_path_var = tk.StringVar(value=self.config.get("fbd_path", "./fbd"))
         self.rpc_host_var = tk.StringVar(value=self.config.get("rpc_host", "127.0.0.1"))
-        self.rpc_port_var = tk.StringVar(value=str(self.config.get("rpc_port", "32869")))
+        self.rpc_port_var = tk.StringVar(
+            value=str(self.config.get("rpc_port", "32869"))
+        )
         self.custom_datadir_var = tk.StringVar(
             value=self.config.get("custom_datadir", "")
         )
@@ -2954,9 +2982,7 @@ class FBDManager:
         self.pool_miner_threads_entry.grid(row=2, column=1, sticky="ew", pady=2)
 
         pool_button_frame = self._create_inline_frame(pool_frame)
-        pool_button_frame.grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(5, 0)
-        )
+        pool_button_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(5, 0))
 
         self.start_pool_miner_btn = self._create_button(
             pool_button_frame, text="Start Pool Miner", command=self.start_pool_miner
@@ -7304,7 +7330,9 @@ class FBDManager:
                     self.auction_monitor._check_all_jobs()
                     self.log("Jobs refresh: due automation scan complete", "debug")
                 except Exception as monitor_error:
-                    self.log(f"[!] Could not run due-action check during refresh: {monitor_error}")
+                    self.log(
+                        f"[!] Could not run due-action check during refresh: {monitor_error}"
+                    )
 
             # Clear existing items
             for item in self.jobs_tree.get_children():
@@ -8750,7 +8778,11 @@ class FBDManager:
 
         # Check for multiple unrevealed bids so we can offer per-bid selection.
         bids = self.get_wallet_bids_silent(wallet, name)
-        unrevealed = [b for b in bids if not b.get("revealed", False) and not b.get("forfeited", False)]
+        unrevealed = [
+            b
+            for b in bids
+            if not b.get("revealed", False) and not b.get("forfeited", False)
+        ]
 
         if len(unrevealed) > 1:
             self._send_reveal_bid_picker(wallet, name, unrevealed)
@@ -8765,7 +8797,9 @@ class FBDManager:
         try:
             cmd, _ = self.get_fbdctl_command("--wallet", wallet, "sendreveal", name)
             result = subprocess.run(
-                cmd, capture_output=True, text=True,
+                cmd,
+                capture_output=True,
+                text=True,
                 cwd=Path(self.fbd_path_var.get()).parent,
             )
             ok, data, err = _extract_fbdctl_result(result)
@@ -8773,13 +8807,19 @@ class FBDManager:
                 if not isinstance(data, dict):
                     data = {}
                 txids = data.get("txids", [])
-                self.log(f"[OK] Manual reveal for '{name}' (wallet '{wallet}'): {len(txids)} bid(s) revealed")
+                self.log(
+                    f"[OK] Manual reveal for '{name}' (wallet '{wallet}'): {len(txids)} bid(s) revealed"
+                )
                 messagebox.showinfo("Success", f"Bids revealed!\nCount: {len(txids)}")
             else:
-                self.log(f"[!] Manual reveal failed for '{name}' (wallet '{wallet}'): {err}")
+                self.log(
+                    f"[!] Manual reveal failed for '{name}' (wallet '{wallet}'): {err}"
+                )
                 messagebox.showerror("Error", err)
         except Exception as e:
-            self.log(f"[!] Manual reveal exception for '{name}' (wallet '{wallet}'): {e}")
+            self.log(
+                f"[!] Manual reveal exception for '{name}' (wallet '{wallet}'): {e}"
+            )
             messagebox.showerror("Error", f"Failed to reveal bids: {e}")
 
     def _send_reveal_bid_picker(self, wallet, name, unrevealed_bids):
@@ -8831,7 +8871,9 @@ class FBDManager:
                     else:
                         cmd, _ = self.get_fbdctl_command("--wallet", w, "sendreveal", n)
                     result = subprocess.run(
-                        cmd, capture_output=True, text=True,
+                        cmd,
+                        capture_output=True,
+                        text=True,
                         cwd=Path(self.fbd_path_var.get()).parent,
                     )
                     ok, data, err = _extract_fbdctl_result(result)
@@ -8839,8 +8881,12 @@ class FBDManager:
                         if not isinstance(data, dict):
                             data = {}
                         txids = data.get("txids", [])
-                        self.log(f"[OK] Revealed bid for '{n}' (wallet '{w}'): {len(txids)} tx(s)")
-                        messagebox.showinfo("Success", f"Revealed!\nTX count: {len(txids)}")
+                        self.log(
+                            f"[OK] Revealed bid for '{n}' (wallet '{w}'): {len(txids)} tx(s)"
+                        )
+                        messagebox.showinfo(
+                            "Success", f"Revealed!\nTX count: {len(txids)}"
+                        )
                     else:
                         self.log(f"[!] Reveal failed for '{n}' (wallet '{w}'): {err}")
                         messagebox.showerror("Reveal Failed", err)
@@ -8848,16 +8894,21 @@ class FBDManager:
                     self.log(f"[!] Reveal exception for '{n}' (wallet '{w}'): {e}")
                     messagebox.showerror("Error", str(e))
 
-            self._create_button(row, text="Reveal this bid", command=_reveal_one).pack(side="right", padx=4)
+            self._create_button(row, text="Reveal this bid", command=_reveal_one).pack(
+                side="right", padx=4
+            )
 
         ttk.Separator(dialog).pack(fill="x", padx=15, pady=8)
         btn_row = ttk.Frame(dialog)
         btn_row.pack(pady=(0, 12))
         self._create_button(
-            btn_row, text="Reveal ALL",
-            command=lambda: [dialog.destroy(), self._do_reveal_all(wallet, name)]
+            btn_row,
+            text="Reveal ALL",
+            command=lambda: [dialog.destroy(), self._do_reveal_all(wallet, name)],
         ).pack(side="left", padx=6)
-        self._create_button(btn_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=6)
+        self._create_button(btn_row, text="Cancel", command=dialog.destroy).pack(
+            side="left", padx=6
+        )
 
     def send_repair_bid(self):
         """Open the Repair Bid dialog from Name Ops."""
@@ -8932,7 +8983,9 @@ class FBDManager:
                 try:
                     value_fbc = float(raw)
                 except ValueError:
-                    messagebox.showerror("Invalid", "Enter a numeric FBC value or leave blank.")
+                    messagebox.showerror(
+                        "Invalid", "Enter a numeric FBC value or leave blank."
+                    )
                     return
 
             status_var.set("Running repairbid…")
@@ -8950,14 +9003,20 @@ class FBDManager:
                     on_success(result)
             else:
                 err = result.get("error", "Unknown error")
-                self.log(f"[!] repairbid failed for '{name}' (wallet '{wallet}'): {err}")
+                self.log(
+                    f"[!] repairbid failed for '{name}' (wallet '{wallet}'): {err}"
+                )
                 status_var.set(f"[!] Failed: {err}")
                 messagebox.showerror("Repair Failed", err)
 
         btn_row = ttk.Frame(dialog)
         btn_row.pack(pady=12)
-        self._create_button(btn_row, text="Run Repair", command=do_repair).pack(side="left", padx=6)
-        self._create_button(btn_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=6)
+        self._create_button(btn_row, text="Run Repair", command=do_repair).pack(
+            side="left", padx=6
+        )
+        self._create_button(btn_row, text="Cancel", command=dialog.destroy).pack(
+            side="left", padx=6
+        )
 
     def send_register(self):
         """Register a won name"""
@@ -14411,7 +14470,6 @@ RESOURCES
             self.log(f"Error deleting job: {e}")
             return False
 
-
     def _start_doc_mode(self):
         """Drive the notebook through all tabs for automated UI documentation capture.
 
@@ -14437,7 +14495,10 @@ RESOURCES
                 doc_theme = _arg.split("=", 1)[1].strip().lower()
         try:
             self.theme_mode_var.set(doc_theme)
-            if hasattr(self, "theme_choice_var") and doc_theme in self.theme_mode_labels:
+            if (
+                hasattr(self, "theme_choice_var")
+                and doc_theme in self.theme_mode_labels
+            ):
                 self.theme_choice_var.set(self.theme_mode_labels[doc_theme])
             self.apply_theme()
             self.root.update_idletasks()
@@ -14449,15 +14510,15 @@ RESOURCES
         # scroll_fraction 0.0 = top, 1.0 = bottom.  Two shots per tab cover
         # all content regardless of screen height.
         sequence = [
-            ("Node & Mining", "01_node_mining_top",    500, 0.0),
+            ("Node & Mining", "01_node_mining_top", 500, 0.0),
             ("Node & Mining", "01_node_mining_bottom", 200, 1.0),
-            ("Wallet",        "02_wallet",             500, 0.0),
-            ("Auctions",      "03_auctions_top",       500, 0.0),
-            ("Auctions",      "03_auctions_middle",    200, 0.25),
-            ("Auctions",      "03_auctions_bottom",    200, 1.0),
-            ("Block Calc",    "04_block_calc",         500, 0.0),
-            ("Settings",      "05_settings_top",       500, 0.0),
-            ("Settings",      "05_settings_bottom",    200, 1.0),
+            ("Wallet", "02_wallet", 500, 0.0),
+            ("Auctions", "03_auctions_top", 500, 0.0),
+            ("Auctions", "03_auctions_middle", 200, 0.25),
+            ("Auctions", "03_auctions_bottom", 200, 1.0),
+            ("Block Calc", "04_block_calc", 500, 0.0),
+            ("Settings", "05_settings_top", 500, 0.0),
+            ("Settings", "05_settings_bottom", 200, 1.0),
         ]
 
         # ── X11 window ID ────────────────────────────────────────────────────
@@ -14529,7 +14590,15 @@ RESOURCES
                     self.root.update()
                 except Exception:
                     pass
-                pos = "top" if scroll_frac == 0.0 else "bottom" if scroll_frac == 1.0 else f"{int(scroll_frac * 100)}pct"
+                pos = (
+                    "top"
+                    if scroll_frac == 0.0
+                    else (
+                        "bottom"
+                        if scroll_frac == 1.0
+                        else f"{int(scroll_frac * 100)}pct"
+                    )
+                )
                 print(f"[doc-mode] {tab_name!r} {pos} → {label}")
                 sentinel.write_text(f"{label}:{_wid}")
 
@@ -14545,6 +14614,7 @@ RESOURCES
 
         print("[doc-mode] Starting automated tab walkthrough in 1 s ...")
         self.root.after(1000, lambda: step(0))
+
 
 def main():
     """Main."""
@@ -14570,6 +14640,24 @@ def main():
         app._start_doc_mode()
     root.mainloop()
 
+
+import subprocess
+import os
+
+# --- X11 DISPLAY auto-detection for WSL/Linux ---
+display_env = os.environ.get("DISPLAY", "")
+if not display_env or display_env.strip() == ":0":
+    try:
+        # Use a login shell to get the real DISPLAY value (WSL2 gives 10.x.x.x:0)
+        display_val = subprocess.check_output(
+            ["bash", "-l", "-c", "echo $DISPLAY"], encoding="utf-8"
+        ).strip()
+        if display_val and display_val != ":0":
+            os.environ["DISPLAY"] = display_val
+        else:
+            os.environ["DISPLAY"] = "127.0.0.1:0"
+    except Exception:
+        os.environ["DISPLAY"] = "127.0.0.1:0"
 
 if __name__ == "__main__":
     main()

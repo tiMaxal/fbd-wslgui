@@ -1,5 +1,21 @@
 # FBD GUI - TODO List
 
+## Snapshot Assessment (test app vs TODO)
+
+**Assessed:** April 21, 2026  
+**Code reviewed:** `fbd-wslgui/fbd_wslgui.test.py`
+
+- Wallet transfer + name transfer integration: **Partial**
+	- FBC send flow exists (`create_wallet_tab`, `send_payment`) but protocol-level name transfer UI/flow is not implemented.
+- Manual `fbdctl` CLI interface tab: **Missing**
+	- No dedicated CLI panel/tab for arbitrary command entry/history.
+- Block calc "Current" phase status: **Missing**
+	- Current timeline status logic uses event-relative `Past/Upcoming/NOW`, not interval-based per-phase `Current` labeling.
+- Donate button in Settings: **Missing**
+	- No donate link/button present in settings tab layout.
+- Github link button in Settings: **Missing**
+	- No project Github link/button present in settings tab layout.
+
 ## High Priority
 
 ### Binary Management & Version Checking
@@ -34,7 +50,7 @@ Since `fbd` and `fbdctl` binaries are not included in the repository (due to fil
 
 ### Wallet Transfer + Name Transfer Integration
 
-**Status:** Planned  
+**Status:** In Progress (Partial)  
 **Created:** April 10, 2026
 
 The wallet transfer interface should cover both FBC transfers and protocol-level name transfers so users can manage ownership changes from the same wallet workflow.
@@ -54,6 +70,32 @@ The wallet transfer interface should cover both FBC transfers and protocol-level
 - Treat name transfer as part of day-to-day wallet operations
 - Reuse active wallet selection and existing RPC/fbdctl command plumbing where possible
 - Add clear status/error handling so protocol failures are understandable from the wallet screen
+
+---
+
+### Atomic Swap: TLD + FBC (Private Trustless Name Sale)
+
+**Status:** Planned  
+**Created:** April 21, 2026
+
+Add an atomic swap workflow so a seller can exchange a name (TLD asset) and FBC in a private, trustless process.
+
+**Requirements:**
+
+- [ ] Add wallet-integrated atomic swap wizard for name sale flows (seller/buyer modes)
+- [ ] Support creating swap offers that bind name-transfer covenant + FBC payment constraints
+- [ ] Validate role, ownership/control of name, balance/fee readiness, and network preconditions before offer creation
+- [ ] Provide optional partner contact fields: email and/or wallet address for quick share
+- [ ] Generate share-ready swap payload text (copy/paste) for out-of-band fulfillment
+- [ ] Add one-click copy for offer details, and import/parse for received offer details
+- [ ] Show lifecycle status: created, shared, imported, funded, fulfilled, failed, expired/cancelled
+- [ ] Add explicit warnings/confirmations for irreversible and time-sensitive swap steps
+
+**Implementation Notes:**
+
+- Reuse `fbdctl` command plumbing and existing wallet/name selection controls
+- Keep swap UX distinct from normal send/transfer to reduce accidental misuse
+- Include fallback flow when partner contact fields are not provided (copy-only sharing)
 
 ---
 
